@@ -20,11 +20,12 @@ const createWindow = () => {
     resizable: false, // Keep fixed size like the screenshot implies
   });
 
-  if (process.env.NODE_ENV === 'development') {
+  // 使用 app.isPackaged 判断是否为打包后的生产环境
+  if (app.isPackaged) {
+    mainWindow.loadFile(path.join(__dirname, '../dist/index.html'));
+  } else {
     mainWindow.loadURL('http://localhost:5173');
     // mainWindow.webContents.openDevTools();
-  } else {
-    mainWindow.loadFile(path.join(__dirname, '../dist/index.html'));
   }
 };
 
