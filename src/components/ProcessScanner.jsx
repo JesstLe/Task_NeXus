@@ -25,15 +25,15 @@ export default function ProcessScanner({ processes, selectedPid, onSelect, onSca
   };
 
   return (
-    <div className="glass rounded-2xl p-5 shadow-soft">
+    <div className="glass rounded-2xl p-5 shadow-soft relative z-50">
       <div className="flex items-center justify-between mb-4">
         <h3 className="font-semibold text-slate-700">目标程序</h3>
         <button
           onClick={onScan}
           disabled={scanning}
           className={`p-2 rounded-xl transition-all ${scanning
-              ? 'bg-violet-100 text-violet-500'
-              : 'hover:bg-slate-100 text-slate-400 hover:text-slate-600'
+            ? 'bg-violet-100 text-violet-500'
+            : 'hover:bg-slate-100 text-slate-400 hover:text-slate-600'
             }`}
         >
           <RefreshCw size={16} className={scanning ? 'animate-spin' : ''} />
@@ -65,7 +65,7 @@ export default function ProcessScanner({ processes, selectedPid, onSelect, onSca
         </div>
 
         {isOpen && (
-          <div className="absolute top-full left-0 right-0 mt-2 bg-white rounded-xl shadow-lg border border-slate-200 overflow-hidden z-50 max-h-72 overflow-y-auto">
+          <div className="absolute top-full left-0 right-0 mt-2 bg-white rounded-xl shadow-lg border border-slate-200 overflow-hidden z-[100] max-h-72 overflow-y-auto">
             {/* 搜索框 */}
             <div className="p-2 border-b border-slate-100 sticky top-0 bg-white">
               <input

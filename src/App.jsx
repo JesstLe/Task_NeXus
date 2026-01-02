@@ -18,6 +18,7 @@ function App() {
   const [mode, setMode] = useState('dynamic');
   const [status, setStatus] = useState('standby');
   const [primaryCore, setPrimaryCore] = useState('auto');
+  const [settings, setSettings] = useState({});
 
   useEffect(() => {
     async function init() {
@@ -30,6 +31,9 @@ function App() {
             throw new Error('获取 CPU 信息失败');
           }
           setCpuInfo(info);
+
+          const savedSettings = await window.electron.getSettings();
+          setSettings(savedSettings || {});
 
           // 检测 AMD CCD 配置
           const ccd = getCcdConfig(info.model);
@@ -114,6 +118,13 @@ function App() {
     setSelectedCores(Array.from({ length: halfCores }, (_, i) => i + halfCores));
   };
 
+  const handleSettingChange = async (key, value) => {
+    setSettings(prev => ({ ...prev, [key]: value }));
+    if (window.electron) {
+      await window.electron.setSetting(key, value);
+    }
+  };
+
   const handleApply = async () => {
     setError(null);
     if (!selectedPid) {
@@ -152,6 +163,79 @@ function App() {
       }
     } catch (err) {
       setError(err.message || '应用失败');
+    }
+  };
+
+  const handleSaveProfile = async () => {
+    setError(null);
+    if (!selectedPid) {
+      setError('请选择目标程序');
+      return;
+    }
+    if (selectedCores.length === 0) {
+      setError('请至少选择一个核心');
+      return;
+    }
+
+    const process = processes.find(p => p.pid === selectedPid);
+    if (!process) {
+      setError('进程已结束或无效');
+      return;
+    }
+
+    let coresToUse = [...selectedCores];
+    if (primaryCore !== 'auto') {
+      const primaryIdx = parseInt(primaryCore, 10);
+      if (!coresToUse.includes(primaryIdx)) {
+        coresToUse.unshift(primaryIdx);
+      }
+    }
+
+    let mask = 0n;
+    coresToUse.forEach(core => {
+      mask |= (1n << BigInt(core));
+    });
+
+    const profile = {
+      name: process.name,
+      affinity: mask.toString(),
+      mode: mode
+    };
+
+    try {
+      if (window.electron) {
+        const result = await window.electron.addProfile(profile);
+        if (result.success) {
+          setSettings(prev => ({ ...prev, profiles: result.profiles }));
+          setStatus('active');
+        } else {
+          setError(result.error || '保存策略失败');
+        }
+      } else {
+        console.log('Mock Save Profile:', profile);
+        const newProfiles = [...(settings.profiles || []), { ...profile, timestamp: Date.now() }];
+        setSettings(prev => ({ ...prev, profiles: newProfiles }));
+      }
+    } catch (err) {
+      console.error(err);
+      setError('保存策略失败');
+    }
+  };
+
+  const handleRemoveProfile = async (name) => {
+    try {
+      if (window.electron) {
+        const result = await window.electron.removeProfile(name);
+        if (result.success) {
+          setSettings(prev => ({ ...prev, profiles: result.profiles }));
+        }
+      } else {
+        const newProfiles = (settings.profiles || []).filter(p => p.name !== name);
+        setSettings(prev => ({ ...prev, profiles: newProfiles }));
+      }
+    } catch (err) {
+      console.error(err);
+      setError('删除策略失败');
     }
   };
 
@@ -229,6 +313,9 @@ function App() {
             primaryCore={primaryCore}
             onPrimaryCoreChange={setPrimaryCore}
             coreCount={coreCount}
+            settings={settings}
+            onSettingChange={handleSettingChange}
+            onRemoveProfile={handleRemoveProfile}
           />
         </div>
       </div>
@@ -240,6 +327,7 @@ function App() {
             status={status}
             onApplyConfig={handleApply}
             onStop={handleStop}
+            onSaveProfile={handleSaveProfile}
             cpuInfo={cpuInfo}
           />
         </div>

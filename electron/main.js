@@ -1,15 +1,276 @@
-const { app, BrowserWindow, ipcMain } = require('electron');
+const { app, BrowserWindow, ipcMain, Tray, Menu, nativeImage, shell } = require('electron');
 const path = require('path');
 const os = require('os');
+const fs = require('fs');
 const { exec } = require('child_process');
 
 let mainWindow = null;
+let tray = null;
+let isQuitting = false;
+
+// 配置文件路径
+const CONFIG_PATH = path.join(app.getPath('userData'), 'config.json');
+
+// 默认配置
+const DEFAULT_CONFIG = {
+  width: 900,
+  height: 600,
+  x: undefined,
+  y: undefined,
+  launchOnStartup: false,
+  closeToTray: false,
+  cpuAffinityMode: 'dynamic',
+  profiles: [] // 自动化策略 [{ name: 'cs2.exe', affinity: 'mask_str', mode: 'dynamic' }]
+};
+
+let appConfig = { ...DEFAULT_CONFIG };
+
+// 追踪已处理的进程 PID，防止重复应用策略
+const handledPids = new Set();
+let monitorInterval = null;
+
+// --- 配置管理 ---
+
+function loadConfig() {
+  try {
+    if (fs.existsSync(CONFIG_PATH)) {
+      const data = fs.readFileSync(CONFIG_PATH, 'utf-8');
+      const savedConfig = JSON.parse(data);
+      appConfig = { ...DEFAULT_CONFIG, ...savedConfig };
+      // 确保 profiles 存在
+      if (!Array.isArray(appConfig.profiles)) {
+        appConfig.profiles = [];
+      }
+    }
+  } catch (error) {
+    console.error('加载配置文件失败:', error);
+  }
+}
+
+function saveConfig() {
+  try {
+    fs.writeFileSync(CONFIG_PATH, JSON.stringify(appConfig, null, 2));
+  } catch (error) {
+    console.error('保存配置文件失败:', error);
+  }
+}
+
+// 应用启动设置
+function updateLoginItemSettings() {
+  const settings = {
+    openAtLogin: appConfig.launchOnStartup,
+    path: app.getPath('exe'),
+  };
+  app.setLoginItemSettings(settings);
+}
+
+// --- 进程监控 ---
+
+function startProcessMonitor() {
+  if (monitorInterval) clearInterval(monitorInterval);
+
+  // 每 5 秒扫描一次
+  monitorInterval = setInterval(scanAndApplyProfiles, 5000);
+  // 立即执行一次
+  scanAndApplyProfiles();
+}
+
+function stopProcessMonitor() {
+  if (monitorInterval) clearInterval(monitorInterval);
+  monitorInterval = null;
+}
+
+async function scanAndApplyProfiles() {
+  if (!appConfig.profiles || appConfig.profiles.length === 0) return;
+
+  // 1. 获取所有运行中的进程
+  const processes = await getProcessesList().catch(err => {
+    console.warn("监控扫描失败:", err.message);
+    return [];
+  });
+
+  if (processes.length === 0) return;
+
+  // 2. 遍历检查是否匹配策略
+  for (const proc of processes) {
+    // 忽略已处理的 PID
+    if (handledPids.has(proc.pid)) continue;
+
+    // 查找匹配的策略
+    const profile = appConfig.profiles.find(p =>
+      p.name.toLowerCase() === proc.name.toLowerCase() && p.enabled !== false
+    );
+
+    if (profile) {
+      console.log(`[Auto] Detected ${proc.name} (PID: ${proc.pid}). Applying profile...`);
+      // 3. 应用策略
+      setAffinity(proc.pid, profile.affinity, profile.mode || 'dynamic')
+        .then(result => {
+          if (result.success) {
+            console.log(`[Auto] Successfully applied profile to PID ${proc.pid}`);
+            handledPids.add(proc.pid);
+          } else {
+            console.warn(`[Auto] Failed to apply profile to PID ${proc.pid}: ${result.error}`);
+          }
+        })
+        .catch(err => console.error(`[Auto] Error setting affinity for ${proc.pid}:`, err));
+    }
+  }
+
+  // 可选：清理不再存在的 PID 的 handledPids 记录
+  // 为了性能，可以只在 Set 很大时清理，或者每隔几次清理
+  if (handledPids.size > 2000) {
+    const currentPids = new Set(processes.map(p => p.pid));
+    for (const pid of handledPids) {
+      if (!currentPids.has(pid)) {
+        handledPids.delete(pid);
+      }
+    }
+  }
+}
+
+// 复用获取进程列表的逻辑
+function getProcessesList() {
+  return new Promise((resolve, reject) => {
+    const isWin = process.platform === 'win32';
+    const cmd = isWin
+      ? 'wmic path Win32_PerfFormattedData_PerfProc_Process get Name,IDProcess,PercentProcessorTime /FORMAT:CSV'
+      : 'ps -ax -o pid,%cpu,comm';
+
+    exec(cmd, { timeout: 10000 }, (error, stdout, stderr) => {
+      if (error) {
+        return reject(error);
+      }
+
+      const processes = [];
+      const lines = stdout.split('\n');
+
+      if (isWin) {
+        lines.forEach(line => {
+          if (!line.trim() || line.includes('Node,') || line.includes('IDProcess')) return;
+          const parts = line.split(',');
+          if (parts.length >= 4) {
+            const pid = parseInt(parts[1].trim(), 10);
+            let name = parts[2].trim();
+            // 过滤无效进程
+            if (!name || name === '_Total' || name === 'Idle' || isNaN(pid) || pid <= 0) return;
+            if (!name.toLowerCase().endsWith('.exe')) name = name + '.exe';
+            processes.push({ pid, name });
+          }
+        });
+      } else {
+        lines.forEach(line => {
+          const trimmed = line.trim();
+          if (!trimmed || trimmed.includes('PID') || trimmed.includes('%CPU')) return;
+          const match = trimmed.match(/^\s*(\d+)\s+([\d.]+)\s+(.+)/);
+          if (match) {
+            const pid = parseInt(match[1], 10);
+            const name = path.basename(match[3].trim());
+            if (name && !isNaN(pid) && pid > 0) {
+              processes.push({ pid, name });
+            }
+          }
+        });
+      }
+      resolve(processes);
+    });
+  });
+}
+
+// 提取 setAffinity 逻辑为独立函数以便重用
+function setAffinity(pid, coreMask, mode = 'dynamic') {
+  return new Promise((resolve) => {
+    // 验证 PID
+    if (!Number.isInteger(pid) || pid <= 0) {
+      return resolve({ success: false, error: '无效的进程 ID' });
+    }
+
+    // 验证 coreMask
+    let mask;
+    try {
+      mask = BigInt(coreMask);
+      if (mask <= 0n) return resolve({ success: false, error: '无效的核心掩码' });
+    } catch {
+      return resolve({ success: false, error: '核心掩码格式错误' });
+    }
+
+    const isWin = process.platform === 'win32';
+    if (isWin) {
+      let priorityClass = 'Normal';
+      let finalMask = mask;
+
+      // Apply Mode Logic
+      if (mode === 'static') {
+        priorityClass = 'High';
+        let lowestBit = 0n;
+        for (let i = 0n; i < 64n; i++) {
+          if ((mask & (1n << i)) !== 0n) {
+            lowestBit = (1n << i);
+            break;
+          }
+        }
+        if (lowestBit !== 0n) finalMask = lowestBit;
+      }
+      else if (mode === 'd2') {
+        priorityClass = 'BelowNormal';
+        const mask = BigInt(coreMask);
+        const selectedIndices = [];
+        for (let i = 0; i < 64; i++) {
+          if ((mask & (1n << BigInt(i))) !== 0n) selectedIndices.push(i);
+        }
+        if (selectedIndices.length > 1) {
+          const mid = Math.floor(selectedIndices.length / 2);
+          const secondHalf = selectedIndices.slice(mid);
+          let newMask = 0n;
+          secondHalf.forEach(idx => newMask |= (1n << BigInt(idx)));
+          finalMask = newMask;
+        }
+      }
+      else if (mode === 'd3') {
+        priorityClass = 'Idle';
+        let highestBit = 0n;
+        for (let i = 63n; i >= 0n; i--) {
+          if ((mask & (1n << i)) !== 0n) {
+            highestBit = (1n << i);
+            break;
+          }
+        }
+        if (highestBit !== 0n) finalMask = highestBit;
+      }
+
+      const safePid = Math.floor(pid);
+      const safeMask = finalMask.toString();
+
+      const cmd = `powershell -Command "try { $Process = Get-Process -Id ${safePid} -ErrorAction Stop; $Process.ProcessorAffinity = ${safeMask}; $Process.PriorityClass = [System.Diagnostics.ProcessPriorityClass]::${priorityClass}; Write-Output 'Success' } catch { Write-Error $_.Exception.Message; exit 1 }"`;
+
+      exec(cmd, { timeout: 5000 }, (error, stdout, stderr) => {
+        if (error) {
+          const errorMsg = stderr && stderr.trim() ? stderr.trim().split('\n').pop() : error.message;
+          resolve({ success: false, error: errorMsg || '设置失败' });
+        } else {
+          resolve({ success: true });
+        }
+      });
+    } else {
+      console.log(`[模拟模式] Auto-Set: Mode=${mode}, PID=${pid}, Mask=${coreMask}`);
+      resolve({ success: true, message: "模拟执行成功" });
+    }
+  });
+}
+
+// --- 窗口管理 ---
 
 const createWindow = () => {
-  mainWindow = new BrowserWindow({
-    width: 900,
-    height: 600,
-    frame: false, // Frameless window
+  loadConfig();
+  updateLoginItemSettings();
+
+  // 启动监控
+  startProcessMonitor();
+
+  const windowOptions = {
+    width: appConfig.width,
+    height: appConfig.height,
+    frame: false,
     titleBarStyle: 'hidden',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -17,17 +278,103 @@ const createWindow = () => {
       contextIsolation: true,
     },
     backgroundColor: '#f5f7fa',
-    resizable: false, // Keep fixed size like the screenshot implies
+    resizable: true,
+    minWidth: 800,
+    minHeight: 500,
+  };
+
+  if (appConfig.x !== undefined && appConfig.y !== undefined) {
+    windowOptions.x = appConfig.x;
+    windowOptions.y = appConfig.y;
+  }
+
+  mainWindow = new BrowserWindow(windowOptions);
+
+  let saveTimer;
+  const debouncedSaveState = () => {
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => {
+      if (!mainWindow) return;
+      const bounds = mainWindow.getBounds();
+      appConfig.width = bounds.width;
+      appConfig.height = bounds.height;
+      appConfig.x = bounds.x;
+      appConfig.y = bounds.y;
+      saveConfig();
+    }, 500);
+  };
+
+  mainWindow.on('resize', debouncedSaveState);
+  mainWindow.on('move', debouncedSaveState);
+
+  mainWindow.on('close', (event) => {
+    if (!isQuitting && appConfig.closeToTray) {
+      event.preventDefault();
+      mainWindow.hide();
+    }
   });
 
-  // 使用 app.isPackaged 判断是否为打包后的生产环境
   if (app.isPackaged) {
     mainWindow.loadFile(path.join(__dirname, '../dist/index.html'));
   } else {
     mainWindow.loadURL('http://localhost:5173');
-    // mainWindow.webContents.openDevTools();
   }
+
+  createTray();
 };
+
+function createTray() {
+  if (tray) return;
+
+  const iconPath = app.isPackaged
+    ? path.join(process.resourcesPath, 'icon.png')
+    : path.join(__dirname, '../build/icon.png');
+
+  let image;
+  try {
+    image = nativeImage.createFromPath(iconPath);
+    if (process.platform === 'darwin') {
+      image = image.resize({ width: 16, height: 16 });
+    } else {
+      image = image.resize({ width: 32, height: 32 });
+    }
+  } catch (e) {
+    console.error("加载托盘图标失败", e);
+    return;
+  }
+
+  tray = new Tray(image);
+  tray.setToolTip('Task Nexus');
+
+  const contextMenu = Menu.buildFromTemplate([
+    { label: '显示主窗口', click: () => mainWindow?.show() },
+    { type: 'separator' },
+    {
+      label: '退出', click: () => {
+        isQuitting = true;
+        app.quit();
+      }
+    }
+  ]);
+
+  tray.setContextMenu(contextMenu);
+
+  tray.on('click', () => {
+    if (mainWindow) {
+      if (mainWindow.isVisible()) {
+        if (mainWindow.isFocused()) {
+          mainWindow.hide();
+        } else {
+          mainWindow.show();
+          mainWindow.focus();
+        }
+      } else {
+        mainWindow.show();
+        mainWindow.focus();
+      }
+    }
+  });
+}
 
 app.whenReady().then(() => {
   createWindow();
@@ -35,20 +382,21 @@ app.whenReady().then(() => {
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       createWindow();
+    } else {
+      mainWindow?.show();
     }
   });
 });
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
-    mainWindow = null;
     app.quit();
   }
 });
 
-// 清理窗口引用
 app.on('before-quit', () => {
-  mainWindow = null;
+  isQuitting = true;
+  stopProcessMonitor();
 });
 
 // --- IPC Handlers ---
@@ -56,14 +404,9 @@ app.on('before-quit', () => {
 ipcMain.handle('get-cpu-info', () => {
   try {
     const cpus = os.cpus();
-    if (!cpus || cpus.length === 0) {
-      throw new Error('无法检测到 CPU 信息');
-    }
+    if (!cpus || cpus.length === 0) throw new Error('无法检测到 CPU 信息');
 
-    // Simplify model name
     let model = cpus[0].model.trim();
-
-    // Clean up CPU name (remove trademarks, frequency, redundant text)
     model = model
       .replace(/\(R\)/gi, '')
       .replace(/\(TM\)/gi, '')
@@ -75,11 +418,7 @@ ipcMain.handle('get-cpu-info', () => {
       .replace(/\s+/g, ' ')
       .trim();
 
-    return {
-      model: model,
-      cores: cpus.length,
-      speed: cpus[0].speed
-    };
+    return { model: model, cores: cpus.length, speed: cpus[0].speed };
   } catch (error) {
     console.error('获取 CPU 信息失败:', error);
     throw new Error(`获取 CPU 信息失败: ${error.message}`);
@@ -87,11 +426,10 @@ ipcMain.handle('get-cpu-info', () => {
 });
 
 ipcMain.handle('get-processes', async () => {
+  // 复用 getProcessesList 但需要解析百分比等完整信息
+  // 这里为了保持兼容性，还是调用 exec 完整逻辑
   return new Promise((resolve, reject) => {
     const isWin = process.platform === 'win32';
-
-    // Windows: 使用 WMIC 获取进程和 CPU 使用率
-    // macOS: 使用 ps 命令获取进程和 CPU 使用率
     const cmd = isWin
       ? 'wmic path Win32_PerfFormattedData_PerfProc_Process get Name,IDProcess,PercentProcessorTime /FORMAT:CSV'
       : 'ps -ax -o pid,%cpu,comm';
@@ -108,7 +446,6 @@ ipcMain.handle('get-processes', async () => {
         const lines = stdout.split('\n');
 
         if (isWin) {
-          // WMIC CSV 格式: Node,IDProcess,Name,PercentProcessorTime
           lines.forEach(line => {
             if (!line.trim() || line.includes('Node,') || line.includes('IDProcess')) return;
             const parts = line.split(',');
@@ -116,40 +453,25 @@ ipcMain.handle('get-processes', async () => {
               const pid = parseInt(parts[1].trim(), 10);
               let name = parts[2].trim();
               const cpu = parseFloat(parts[3].trim()) || 0;
-
-              // 过滤掉系统进程和空名称
               if (!name || name === '_Total' || name === 'Idle' || isNaN(pid) || pid <= 0) return;
-
-              // 添加 .exe 后缀（如果没有）
-              if (!name.toLowerCase().endsWith('.exe')) {
-                name = name + '.exe';
-              }
-
+              if (!name.toLowerCase().endsWith('.exe')) name = name + '.exe';
               processes.push({ pid, name, cpu });
             }
           });
         } else {
-          // macOS ps 格式: PID %CPU COMMAND
           lines.forEach(line => {
             const trimmed = line.trim();
             if (!trimmed || trimmed.includes('PID') || trimmed.includes('%CPU')) return;
-
             const match = trimmed.match(/^\s*(\d+)\s+([\d.]+)\s+(.+)/);
             if (match) {
               const pid = parseInt(match[1], 10);
               const cpu = parseFloat(match[2]) || 0;
               const name = path.basename(match[3].trim());
-
-              if (name && !isNaN(pid) && pid > 0) {
-                processes.push({ pid, name, cpu });
-              }
+              if (name && !isNaN(pid) && pid > 0) processes.push({ pid, name, cpu });
             }
           });
         }
-
-        // 按 CPU 使用率降序排列
         processes.sort((a, b) => b.cpu - a.cpu);
-
         resolve(processes);
       } catch (parseError) {
         console.error('解析进程列表失败:', parseError);
@@ -159,111 +481,65 @@ ipcMain.handle('get-processes', async () => {
   });
 });
 
-ipcMain.handle('set-affinity', (event, pid, coreMask, mode = 'dynamic') => {
-  // 输入验证
-  if (!Number.isInteger(pid) || pid <= 0) {
-    return Promise.resolve({ success: false, error: '无效的进程 ID' });
+ipcMain.handle('set-affinity', (event, pid, coreMask, mode) => {
+  return setAffinity(pid, coreMask, mode);
+});
+
+// --- Settings IPC ---
+
+ipcMain.handle('get-settings', () => appConfig);
+
+ipcMain.handle('set-setting', (event, key, value) => {
+  // 安全检查
+  if (['width', 'height', 'x', 'y', 'launchOnStartup', 'closeToTray', 'cpuAffinityMode'].includes(key)) {
+    appConfig[key] = value;
+    saveConfig();
+    if (key === 'launchOnStartup') updateLoginItemSettings();
+    return { success: true };
+  }
+  return { success: false, error: '无效的设置项' };
+});
+
+// --- Profile IPC ---
+
+ipcMain.handle('add-profile', (event, profile) => {
+  if (!profile || !profile.name || !profile.affinity) {
+    return { success: false, error: '策略数据不完整' };
   }
 
-  // 验证 coreMask
-  let mask;
-  try {
-    mask = BigInt(coreMask);
-    if (mask <= 0n) {
-      return Promise.resolve({ success: false, error: '无效的核心掩码' });
-    }
-  } catch (error) {
-    return Promise.resolve({ success: false, error: '核心掩码格式错误' });
-  }
-
-  // 验证模式
-  const validModes = ['dynamic', 'static', 'd2', 'd3'];
-  if (!validModes.includes(mode)) {
-    return Promise.resolve({ success: false, error: '无效的绑定模式' });
-  }
-
-  const isWin = process.platform === 'win32';
-
-  if (isWin) {
-    let priorityClass = 'Normal';
-    let finalMask = mask;
-
-    // Apply Mode Logic
-    if (mode === 'static') {
-      priorityClass = 'High';
-      // For Static: Use only the first selected core (lowest bit set)
-      const mask = BigInt(coreMask);
-      let lowestBit = 0n;
-      for (let i = 0n; i < 64n; i++) {
-        if ((mask & (1n << i)) !== 0n) {
-          lowestBit = (1n << i);
-          break;
-        }
-      }
-      if (lowestBit !== 0n) finalMask = lowestBit;
-    }
-    else if (mode === 'd2') {
-      priorityClass = 'BelowNormal';
-      // For D2: Use latter half of selected cores
-      const mask = BigInt(coreMask);
-      const selectedIndices = [];
-      for (let i = 0; i < 64; i++) {
-        if ((mask & (1n << BigInt(i))) !== 0n) selectedIndices.push(i);
-      }
-
-      if (selectedIndices.length > 1) {
-        const mid = Math.floor(selectedIndices.length / 2);
-        const secondHalf = selectedIndices.slice(mid);
-        let newMask = 0n;
-        secondHalf.forEach(idx => newMask |= (1n << BigInt(idx)));
-        finalMask = newMask;
-      }
-    }
-    else if (mode === 'd3') {
-      priorityClass = 'Idle'; // Lowest priority
-      // For D3: Use only the last selected core
-      const mask = BigInt(coreMask);
-      let highestBit = 0n;
-      for (let i = 63n; i >= 0n; i--) {
-        if ((mask & (1n << i)) !== 0n) {
-          highestBit = (1n << i);
-          break;
-        }
-      }
-      if (highestBit !== 0n) finalMask = highestBit;
-    }
-
-    // 使用参数化命令，防止命令注入
-    // 验证 PID 和 finalMask 都是安全的数字
-    const safePid = Math.floor(pid);
-    const safeMask = finalMask.toString();
-
-    // 验证 finalMask 是有效的数字字符串
-    if (!/^\d+$/.test(safeMask)) {
-      return Promise.resolve({ success: false, error: '核心掩码格式无效' });
-    }
-
-    const cmd = `powershell -Command "try { $Process = Get-Process -Id ${safePid} -ErrorAction Stop; $Process.ProcessorAffinity = ${safeMask}; $Process.PriorityClass = [System.Diagnostics.ProcessPriorityClass]::${priorityClass}; Write-Output 'Success' } catch { Write-Error $_.Exception.Message; exit 1 }"`;
-    console.log(`执行 [${mode}]: PID=${safePid}, Mask=${safeMask}`);
-
-    return new Promise((resolve) => {
-      exec(cmd, { timeout: 5000 }, (error, stdout, stderr) => {
-        if (error) {
-          console.error('设置亲和性失败:', error.message);
-          // 尝试从 stderr 提取更详细的错误信息
-          const errorMsg = stderr && stderr.trim()
-            ? stderr.trim().split('\n').pop()
-            : error.message;
-          resolve({ success: false, error: errorMsg || '设置失败，请检查进程是否存在或权限是否足够' });
-        } else {
-          resolve({ success: true });
-        }
-      });
-    });
+  // 检查是否已存在
+  const index = appConfig.profiles.findIndex(p => p.name.toLowerCase() === profile.name.toLowerCase());
+  if (index !== -1) {
+    // 更新
+    appConfig.profiles[index] = { ...appConfig.profiles[index], ...profile };
   } else {
-    console.log(`[模拟模式] Mode: ${mode}, PID: ${pid}, Mask: ${coreMask}`);
-    return Promise.resolve({ success: true, message: "在 macOS 上模拟执行" });
+    // 新增
+    appConfig.profiles.push({
+      ...profile,
+      enabled: true,
+      timestamp: Date.now()
+    });
   }
+
+  saveConfig();
+  // 立即触发一次扫描，应用到可能正在运行的进程
+  scanAndApplyProfiles();
+  return { success: true, profiles: appConfig.profiles };
+});
+
+ipcMain.handle('remove-profile', (event, name) => {
+  const initialLength = appConfig.profiles.length;
+  appConfig.profiles = appConfig.profiles.filter(p => p.name.toLowerCase() !== name.toLowerCase());
+
+  if (appConfig.profiles.length !== initialLength) {
+    saveConfig();
+    return { success: true, profiles: appConfig.profiles };
+  }
+  return { success: false, error: '未找到指定策略' };
+});
+
+ipcMain.handle('get-profiles', () => {
+  return appConfig.profiles || [];
 });
 
 ipcMain.on('window-minimize', () => mainWindow?.minimize());

@@ -1,7 +1,16 @@
 import React from 'react';
-import { Zap, Lock, Scale, Leaf, ChevronDown } from 'lucide-react';
+import { Zap, Lock, Scale, Leaf, ChevronDown, Trash2 } from 'lucide-react';
 
-export default function SettingsPanel({ mode, onModeChange, primaryCore, onPrimaryCoreChange, coreCount = 16 }) {
+export default function SettingsPanel({
+  mode,
+  onModeChange,
+  primaryCore,
+  onPrimaryCoreChange,
+  coreCount = 16,
+  settings = {},
+  onSettingChange = () => { },
+  onRemoveProfile = () => { }
+}) {
   const coreOptions = Array.from({ length: coreCount }, (_, i) => i);
 
   const modes = [
@@ -47,8 +56,8 @@ export default function SettingsPanel({ mode, onModeChange, primaryCore, onPrima
                 key={m.id}
                 onClick={() => onModeChange(m.id)}
                 className={`relative p-4 rounded-xl text-left transition-all duration-200 ${isActive
-                    ? 'bg-gradient-to-br from-violet-500 to-pink-500 text-white shadow-glow'
-                    : 'bg-slate-50 hover:bg-slate-100 text-slate-600 border border-slate-200'
+                  ? 'bg-gradient-to-br from-violet-500 to-pink-500 text-white shadow-glow'
+                  : 'bg-slate-50 hover:bg-slate-100 text-slate-600 border border-slate-200'
                   }`}
               >
                 <Icon size={18} className={isActive ? 'text-white' : 'text-violet-500'} />
@@ -61,6 +70,81 @@ export default function SettingsPanel({ mode, onModeChange, primaryCore, onPrima
               </button>
             );
           })}
+        </div>
+      </div>
+
+      {/* 自动化策略 */}
+      <div className="glass rounded-2xl p-5 shadow-soft">
+        <h4 className="font-medium text-slate-700 mb-4">自动化策略</h4>
+
+        {!settings.profiles || settings.profiles.length === 0 ? (
+          <div className="text-center py-6 text-slate-400 text-sm bg-slate-50/50 rounded-xl border border-slate-100 border-dashed">
+            暂无已保存的自动化策略
+            <div className="mt-1 text-xs opacity-70">在控制栏点击“保存策略”添加</div>
+          </div>
+        ) : (
+          <div className="space-y-2.5">
+            {settings.profiles.map((profile) => (
+              <div key={profile.name} className="flex items-center justify-between p-3 bg-slate-50 border border-slate-200 rounded-xl group hover:border-violet-200 transition-colors">
+                <div>
+                  <div className="font-medium text-slate-700 text-sm">{profile.name}</div>
+                  <div className="flex items-center gap-2 mt-0.5">
+                    <span className="text-[10px] px-1.5 py-0.5 bg-white border border-slate-200 rounded text-slate-500">
+                      {modes.find(m => m.id === profile.mode)?.label || profile.mode}
+                    </span>
+                    <span className="text-[10px] text-slate-400">
+                      {new Date(profile.timestamp).toLocaleDateString()}
+                    </span>
+                  </div>
+                </div>
+                <button
+                  onClick={() => onRemoveProfile(profile.name)}
+                  className="p-2 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors opacity-0 group-hover:opacity-100"
+                  title="删除策略"
+                >
+                  <Trash2 size={16} />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* 系统设置 */}
+      <div className="glass rounded-2xl p-5 shadow-soft">
+        <h4 className="font-medium text-slate-700 mb-4">系统设置</h4>
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <h5 className="font-medium text-slate-700">开机自启动</h5>
+              <p className="text-xs text-slate-400">系统启动时自动运行程序</p>
+            </div>
+            <label className="relative inline-flex items-center cursor-pointer">
+              <input
+                type="checkbox"
+                checked={!!settings.launchOnStartup}
+                onChange={(e) => onSettingChange('launchOnStartup', e.target.checked)}
+                className="sr-only peer"
+              />
+              <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-violet-500"></div>
+            </label>
+          </div>
+
+          <div className="flex items-center justify-between">
+            <div>
+              <h5 className="font-medium text-slate-700">关闭时最小化</h5>
+              <p className="text-xs text-slate-400">点击关闭按钮时隐藏到托盘</p>
+            </div>
+            <label className="relative inline-flex items-center cursor-pointer">
+              <input
+                type="checkbox"
+                checked={!!settings.closeToTray}
+                onChange={(e) => onSettingChange('closeToTray', e.target.checked)}
+                className="sr-only peer"
+              />
+              <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-violet-500"></div>
+            </label>
+          </div>
         </div>
       </div>
     </div>

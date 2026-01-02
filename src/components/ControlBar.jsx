@@ -1,7 +1,7 @@
 import React from 'react';
-import { Play, Square, Activity } from 'lucide-react';
+import { Play, Square, Activity, Save } from 'lucide-react';
 
-export default function ControlBar({ status, onApplyConfig, onStop, cpuInfo }) {
+export default function ControlBar({ status, onApplyConfig, onStop, onSaveProfile, cpuInfo }) {
   const isRunning = status === 'active';
 
   return (
@@ -21,13 +21,22 @@ export default function ControlBar({ status, onApplyConfig, onStop, cpuInfo }) {
 
       <div className="flex items-center gap-3">
         {isRunning && (
-          <button
-            onClick={onStop}
-            className="px-5 py-2.5 rounded-xl border border-slate-200 text-slate-600 hover:bg-red-50 hover:text-red-500 hover:border-red-200 transition-all font-medium flex items-center gap-2 text-sm"
-          >
-            <Square size={14} fill="currentColor" />
-            停止
-          </button>
+          <>
+            <button
+              onClick={onSaveProfile}
+              className="px-4 py-2.5 rounded-xl border border-slate-200 text-slate-600 hover:bg-violet-50 hover:text-violet-600 hover:border-violet-200 transition-all font-medium flex items-center gap-2 text-sm"
+            >
+              <Save size={14} />
+              保存策略
+            </button>
+            <button
+              onClick={onStop}
+              className="px-5 py-2.5 rounded-xl border border-slate-200 text-slate-600 hover:bg-red-50 hover:text-red-500 hover:border-red-200 transition-all font-medium flex items-center gap-2 text-sm"
+            >
+              <Square size={14} fill="currentColor" />
+              停止
+            </button>
+          </>
         )}
 
         <button
