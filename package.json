@@ -21,8 +21,23 @@
       "output": "release"
     },
     "win": {
-      "target": "nsis",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
       "icon": "build/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "perMachine": true,
+      "deleteAppDataOnUninstall": true,
+      "uninstallDisplayName": "CoreX Optimizer",
+      "runAfterFinish": false
     },
     "mac": {
       "target": "dmg"

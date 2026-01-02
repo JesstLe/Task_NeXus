@@ -3,11 +3,6 @@ const path = require('path');
 const os = require('os');
 const { exec } = require('child_process');
 
-// Handle creating/removing shortcuts on Windows when installing/uninstalling.
-if (require('electron-squirrel-startup')) {
-  app.quit();
-}
-
 let mainWindow;
 
 const createWindow = () => {
@@ -55,7 +50,7 @@ ipcMain.handle('get-cpu-info', () => {
   const cpus = os.cpus();
   // Simplify model name
   let model = cpus[0].model.trim();
-  
+
   // Clean up CPU name (remove trademarks, frequency, redundant text)
   model = model
     .replace(/\(R\)/gi, '')
@@ -80,8 +75,8 @@ ipcMain.handle('get-processes', async () => {
     const isWin = process.platform === 'win32';
     // Mac: ps -ax -o pid,comm
     // Win: tasklist
-    const cmd = isWin 
-      ? 'tasklist /FO CSV /NH' 
+    const cmd = isWin
+      ? 'tasklist /FO CSV /NH'
       : 'ps -ax -o pid,comm';
 
     exec(cmd, (error, stdout, stderr) => {
@@ -117,7 +112,7 @@ ipcMain.handle('get-processes', async () => {
           }
         });
       }
-      
+
       processes.sort((a, b) => a.name.localeCompare(b.name));
       resolve(processes);
     });
@@ -126,7 +121,7 @@ ipcMain.handle('get-processes', async () => {
 
 ipcMain.handle('set-affinity', (event, pid, coreMask, mode = 'dynamic') => {
   const isWin = process.platform === 'win32';
-  
+
   if (isWin) {
     let priorityClass = 'Normal';
     let finalMask = BigInt(coreMask);
@@ -139,13 +134,13 @@ ipcMain.handle('set-affinity', (event, pid, coreMask, mode = 'dynamic') => {
       const mask = BigInt(coreMask);
       let lowestBit = 0n;
       for (let i = 0n; i < 64n; i++) {
-         if ((mask & (1n << i)) !== 0n) {
-             lowestBit = (1n << i);
-             break;
-         }
+        if ((mask & (1n << i)) !== 0n) {
+          lowestBit = (1n << i);
+          break;
+        }
       }
       if (lowestBit !== 0n) finalMask = lowestBit;
-    } 
+    }
     else if (mode === 'd2') {
       priorityClass = 'BelowNormal';
       // For D2: Use latter half of selected cores
@@ -154,7 +149,7 @@ ipcMain.handle('set-affinity', (event, pid, coreMask, mode = 'dynamic') => {
       for (let i = 0; i < 64; i++) {
         if ((mask & (1n << BigInt(i))) !== 0n) selectedIndices.push(i);
       }
-      
+
       if (selectedIndices.length > 1) {
         const mid = Math.floor(selectedIndices.length / 2);
         const secondHalf = selectedIndices.slice(mid);
@@ -162,24 +157,24 @@ ipcMain.handle('set-affinity', (event, pid, coreMask, mode = 'dynamic') => {
         secondHalf.forEach(idx => newMask |= (1n << BigInt(idx)));
         finalMask = newMask;
       }
-    } 
+    }
     else if (mode === 'd3') {
       priorityClass = 'Idle'; // Lowest priority
       // For D3: Use only the last selected core
       const mask = BigInt(coreMask);
       let highestBit = 0n;
       for (let i = 63n; i >= 0n; i--) {
-         if ((mask & (1n << i)) !== 0n) {
-             highestBit = (1n << i);
-             break;
-         }
+        if ((mask & (1n << i)) !== 0n) {
+          highestBit = (1n << i);
+          break;
+        }
       }
       if (highestBit !== 0n) finalMask = highestBit;
     }
 
     const cmd = `powershell -Command "$Process = Get-Process -Id ${pid}; $Process.ProcessorAffinity = ${finalMask.toString()}; $Process.PriorityClass = [System.Diagnostics.ProcessPriorityClass]::${priorityClass}"`;
     console.log(`Executing [${mode}]: ${cmd}`);
-    
+
     return new Promise((resolve) => {
       exec(cmd, (error) => {
         if (error) {

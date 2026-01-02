@@ -13,6 +13,7 @@ function App() {
   const [selectedCores, setSelectedCores] = useState([]);
   const [mode, setMode] = useState('dynamic'); // 'dynamic' | 'static' | 'd2' | 'd3'
   const [status, setStatus] = useState('standby'); // 'standby' | 'active'
+  const [primaryCore, setPrimaryCore] = useState('auto'); // 第一优先核心
 
   // Initialize CPU Info and Cores
   useEffect(() => {
@@ -57,8 +58,8 @@ function App() {
   };
 
   const toggleCore = (index) => {
-    setSelectedCores(prev => 
-      prev.includes(index) 
+    setSelectedCores(prev =>
+      prev.includes(index)
         ? prev.filter(i => i !== index)
         : [...prev, index].sort((a, b) => a - b)
     );
@@ -88,11 +89,21 @@ function App() {
       alert('请先选择一个目标进程');
       return;
     }
-    
+
+    // 如果设置了优先核心，确保它在选中列表中的最前面
+    let coresToUse = [...selectedCores];
+    if (primaryCore !== 'auto') {
+      const primaryIdx = parseInt(primaryCore, 10);
+      // 确保优先核心在选中列表中
+      if (!coresToUse.includes(primaryIdx)) {
+        coresToUse.unshift(primaryIdx);
+      }
+    }
+
     // Calculate mask
     // Core 0 = 1, Core 1 = 2, Core 2 = 4 ...
     let mask = 0n;
-    selectedCores.forEach(core => {
+    coresToUse.forEach(core => {
       mask |= (1n << BigInt(core));
     });
 
@@ -120,17 +131,17 @@ function App() {
   return (
     <div className="flex flex-col h-screen bg-[#f5f7fa] font-sans text-gray-800">
       <Header cpuModel={cpuInfo?.model} />
-      
+
       <div className="flex-1 overflow-y-auto pb-6 scrollbar-thin scrollbar-thumb-gray-300 scrollbar-track-transparent">
-        <ProcessScanner 
-          processes={processes} 
-          selectedPid={selectedPid} 
-          onSelect={setSelectedPid} 
+        <ProcessScanner
+          processes={processes}
+          selectedPid={selectedPid}
+          onSelect={setSelectedPid}
           onScan={handleScan}
           scanning={scanning}
         />
-        
-        <CoreGrid 
+
+        <CoreGrid
           cores={cores}
           selectedCores={selectedCores}
           onToggleCore={toggleCore}
@@ -140,17 +151,25 @@ function App() {
           onSelectSMT={selectSMT}
           onApply={handleApply}
         />
-        
-        <SettingsPanel mode={mode} onModeChange={setMode} />
+
+        <SettingsPanel
+          mode={mode}
+          onModeChange={setMode}
+          primaryCore={primaryCore}
+          onPrimaryCoreChange={setPrimaryCore}
+          coreCount={coreCount}
+        />
       </div>
 
-      <ControlBar 
-        status={status} 
-        onApplyConfig={handleApply} 
-        onStop={handleStop} 
+      <ControlBar
+        status={status}
+        onApplyConfig={handleApply}
+        onStop={handleStop}
+        cpuInfo={cpuInfo}
       />
     </div>
   );
 }
 
 export default App;
+
