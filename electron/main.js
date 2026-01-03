@@ -923,40 +923,89 @@ ipcMain.handle('list-power-plans', async () => {
 
 let currentTimerResolution = 0; // 0 = disabled
 
-// 设置定时器分辨率 (Windows) - 支持自定义精度
+// 设置定时器分辨率 (Windows) - 支持 0.5ms 等高精度
 ipcMain.handle('set-timer-resolution', async (event, periodMs) => {
   if (process.platform !== 'win32') {
     return { success: false, error: '仅支持 Windows' };
   }
 
-  // periodMs: 0 = disable, 1 = 1ms, 5 = 0.5ms (实际传入 1 或更小)
-  // Windows 最小支持 0.5ms (500us)
-  const period = periodMs === 0 ? 0 : Math.max(1, Math.round(periodMs));
+  // periodMs: 0 = disable
+  // NtSetTimerResolution 使用 100ns 为单位
+  // 1ms = 10,000 units
+  // 0.5ms = 5,000 units
+  // 最大分辨率通常为 0.5ms (5000)
 
-  // 先结束之前的设置
-  let script = '';
-  if (currentTimerResolution > 0) {
-    script += `Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public class WinMM { [DllImport("winmm.dll")] public static extern uint timeEndPeriod(uint period); }'; [WinMM]::timeEndPeriod(${currentTimerResolution}); `;
-  }
+  const enable = periodMs > 0;
+  const desiredUnits = enable ? Math.round(periodMs * 10000) : 0;
 
-  if (period > 0) {
-    script += `Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public class WinMM2 { [DllImport("winmm.dll")] public static extern uint timeBeginPeriod(uint period); }'; [WinMM2]::timeBeginPeriod(${period})`;
-  }
+  // C# 代码定义: 调用 ntdll.dll 的 NtSetTimerResolution
+  const csharpCode = `
+    using System;
+    using System.Runtime.InteropServices;
+    
+    public class HighResTimer {
+      [DllImport("ntdll.dll", SetLastError = true)]
+      public static extern int NtSetTimerResolution(uint DesiredTime, bool SetResolution, out uint ActualTime);
+      
+      public static uint Set(uint units) {
+        uint actual;
+        // SetResolution = true (开启), false (关闭/恢复默认)
+        // 注意：关闭时 DesiredTime 设为 0 即可，或者使用 false
+        NtSetTimerResolution(units, ${enable}, out actual);
+        return actual;
+      }
+    }
+  `;
 
-  if (!script) {
-    currentTimerResolution = 0;
-    return { success: true, resolution: 0 };
-  }
+  // PowerShell 脚本
+  const script = enable
+    ? `Add-Type -TypeDefinition '${csharpCode}'; [HighResTimer]::Set(${desiredUnits})`
+    : `Add-Type -TypeDefinition '${csharpCode}'; [HighResTimer]::Set(0)`; // SetResolution=false logic handled in C# string interpolation above roughly, actually let's keep it simple:
+
+  // 更严谨的 PowerShell 构建
+  // 为了避免 Add-Type 重复定义错误，如果不重启 App 可能会报错，
+  // 实际生产中最好把 TypeDefinition 放在全局或检查 try-catch。
+  // 这里简化处理：使用唯一的类名或忽略错误。
+  const uniqueId = Date.now(); // 防止类名冲突（简单版）
+  // 实际上 Add-Type 在同一进程只能运行一次相同的类定义。
+  // 更好的方式是只定义一次。但由于是在 exec 中，每次都是新 PowerShell 进程，所以没问题。
+
+  const psCommand = `
+    $code = @"
+    using System;
+    using System.Runtime.InteropServices;
+    public class NativeTimer {
+      [DllImport("ntdll.dll")]
+      public static extern int NtSetTimerResolution(uint DesiredTime, bool SetResolution, out uint ActualTime);
+    }
+"@
+    Add-Type -TypeDefinition $code
+    $actual = 0
+    [NativeTimer]::NtSetTimerResolution(${desiredUnits}, $${enable}, [ref]$actual)
+    Write-Output $actual
+  `;
 
   return new Promise((resolve) => {
-    exec(`powershell -NoProfile -Command "${script}"`, (error) => {
+    exec(`powershell -NoProfile -Command "${psCommand}"`, (error, stdout) => {
       if (error) {
         console.error('Timer resolution error:', error.message);
+        // 回退到旧方法（如果是 1ms 以上）
+        if (periodMs >= 1) {
+          const fallbackScript = enable
+            ? `Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public class WinMM { [DllImport("winmm.dll")] public static extern uint timeBeginPeriod(uint period); }'; [WinMM]::timeBeginPeriod(${Math.round(periodMs)})`
+            : `Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public class WinMM { [DllImport("winmm.dll")] public static extern uint timeEndPeriod(uint period); }'; [WinMM]::timeEndPeriod(1)`;
+          exec(`powershell -NoProfile -Command "${fallbackScript}"`, () => { });
+        }
         resolve({ success: false, error: error.message });
       } else {
-        currentTimerResolution = period;
-        console.log(`Timer resolution: ${period > 0 ? `${period}ms` : 'disabled'}`);
-        resolve({ success: true, resolution: period });
+        // Output is CurrentResolution in 100ns units
+        const currentUnits = parseInt(stdout.trim(), 10);
+        const actualMs = currentUnits / 10000;
+
+        currentTimerResolution = enable ? (actualMs || periodMs) : 0;
+
+        console.log(`Timer resolution set. Desired: ${periodMs}ms, Actual System: ${actualMs}ms`);
+        resolve({ success: true, resolution: currentTimerResolution });
       }
     });
   });

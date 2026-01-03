@@ -212,28 +212,67 @@ function TimerResolutionControl() {
     setLoading(false);
   };
 
-  const options = [
-    { value: 0, label: '关闭' },
-    { value: 1, label: '1ms' },
-    { value: 2, label: '2ms' },
-    { value: 4, label: '4ms' }
-  ];
+  const [inputVal, setInputVal] = useState('1.0');
+
+  useEffect(() => {
+    if (window.electron?.getTimerResolution) {
+      window.electron.getTimerResolution().then(r => {
+        const res = r.resolution || 0;
+        setResolution(res);
+        if (res > 0) setInputVal(res.toString());
+      });
+    }
+  }, []);
+
+  const handleSet = async () => {
+    const val = parseFloat(inputVal);
+    if (!isNaN(val) && val > 0) {
+      setRes(val);
+    }
+  };
+
+  const handleDisable = async () => {
+    setRes(0);
+  };
 
   return (
-    <div className="flex items-center gap-1">
-      {options.map(o => (
-        <button
-          key={o.value}
-          onClick={() => setRes(o.value)}
+    <div className="flex items-center gap-2">
+      <div className={`flex items-center gap-1 px-2 py-1 rounded-lg border transition-all ${resolution > 0 ? 'border-violet-500 bg-violet-50' : 'border-slate-200 bg-slate-50'
+        }`}>
+        <input
+          type="text"
+          value={inputVal}
+          onChange={(e) => setInputVal(e.target.value)}
+          placeholder="ms"
+          className="w-12 bg-transparent text-xs text-center focus:outline-none"
           disabled={loading}
-          className={`px-2 py-1 text-xs rounded-lg transition-all ${resolution === o.value
-            ? 'bg-violet-500 text-white'
-            : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-            }`}
+        />
+        <span className="text-xs text-slate-400">ms</span>
+      </div>
+
+      <button
+        onClick={handleSet}
+        disabled={loading}
+        className="px-2 py-1 text-xs bg-violet-500 text-white rounded-lg hover:bg-violet-600 disabled:opacity-50"
+      >
+        应用
+      </button>
+
+      {resolution > 0 && (
+        <button
+          onClick={handleDisable}
+          disabled={loading}
+          className="px-2 py-1 text-xs bg-slate-100 text-slate-500 rounded-lg hover:bg-slate-200"
         >
-          {o.label}
+          关闭
         </button>
-      ))}
+      )}
+
+      {resolution > 0 && (
+        <span className="text-xs text-green-600 ml-1 font-mono">
+          当前: {resolution.toFixed(4).replace(/\.?0+$/, '')}ms
+        </span>
+      )}
     </div>
   );
 }
