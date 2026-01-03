@@ -541,7 +541,7 @@ export default function SettingsPanel({
 
   const modes = [
     { id: 'dynamic', label: '自动分配', icon: Zap, desc: '正常优先级' },
-    { id: 'static', label: '固定绑核', icon: Lock, desc: '单核高优先级' },
+    { id: 'static', label: '固定绑核', icon: Lock, desc: '绑定到优先核心，单核高优先级' },
     { id: 'd2', label: '均衡调度', icon: Scale, desc: '全核较低优先级' },
     { id: 'd3', label: '节能优先', icon: Leaf, desc: 'E-Core最低优先级' },
   ];

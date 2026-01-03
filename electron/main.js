@@ -559,16 +559,33 @@ function setAffinity(pid, coreMask, mode = 'dynamic', primaryCore = null) {
 
       // Apply Mode Logic
       if (mode === 'static') {
-        // 固定绑核：锁定到单个核心（最低位），高优先级
+        // 固定绑核：锁定到单个核心，高优先级
+        // 优先使用用户设置的优先核心，如果没有则使用选中核心中的第一个
         priorityClass = 'High';
-        let lowestBit = 0n;
-        for (let i = 0n; i < 64n; i++) {
-          if ((mask & (1n << i)) !== 0n) {
-            lowestBit = (1n << i);
-            break;
+        let targetCoreBit = 0n;
+        
+        if (primaryCore !== null && primaryCore !== undefined && primaryCore !== 'auto') {
+          // 如果指定了优先核心，使用优先核心
+          const primaryIdx = parseInt(primaryCore, 10);
+          if (!isNaN(primaryIdx) && primaryIdx >= 0 && primaryIdx < 64) {
+            // 验证优先核心是否在掩码中
+            if ((mask & (1n << BigInt(primaryIdx))) !== 0n) {
+              targetCoreBit = (1n << BigInt(primaryIdx));
+            }
           }
         }
-        if (lowestBit !== 0n) finalMask = lowestBit;
+        
+        // 如果没有优先核心或优先核心不在掩码中，使用选中核心中的第一个（最低位）
+        if (targetCoreBit === 0n) {
+          for (let i = 0n; i < 64n; i++) {
+            if ((mask & (1n << i)) !== 0n) {
+              targetCoreBit = (1n << i);
+              break;
+            }
+          }
+        }
+        
+        if (targetCoreBit !== 0n) finalMask = targetCoreBit;
       }
       else if (mode === 'd2') {
         // 均衡调度：保持完整核心掩码，使用较低优先级
@@ -602,8 +619,9 @@ function setAffinity(pid, coreMask, mode = 'dynamic', primaryCore = null) {
       const safePid = Math.floor(pid);
       const safeMask = finalMask.toString();
 
-      // 如果指定了优先核心，使用线程级别的亲和性设置
-      if (primaryCore !== null && primaryCore !== undefined && primaryCore !== 'auto') {
+      // 如果指定了优先核心，且不是 static 模式，使用线程级别的亲和性设置
+      // static 模式已经将进程绑定到单个核心，不需要线程级别的设置
+      if (mode !== 'static' && primaryCore !== null && primaryCore !== undefined && primaryCore !== 'auto') {
         const primaryIdx = parseInt(primaryCore, 10);
         if (!isNaN(primaryIdx) && primaryIdx >= 0 && primaryIdx < 64) {
           // 优先核心掩码
