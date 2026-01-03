@@ -18,8 +18,8 @@ export default function Header({ cpuModel }) {
   return (
     <div className="flex items-center justify-between px-6 py-4 drag bg-white/50 backdrop-blur-md border-b border-slate-200/50">
       <div className="flex items-center gap-3">
-        <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-violet-500 to-pink-500 flex items-center justify-center shadow-glow">
-          <Sparkles size={16} className="text-white" />
+        <div className="w-8 h-8 rounded-full bg-gradient-to-br from-violet-500 to-pink-500 flex items-center justify-center shadow-glow">
+          <span className="text-white font-bold text-xs tracking-tight">TN</span>
         </div>
         <div>
           <h1 className="text-lg font-bold bg-gradient-to-r from-violet-600 to-pink-600 bg-clip-text text-transparent">Task Nexus</h1>

@@ -22,8 +22,8 @@
     ],
     "extraResources": [
       {
-        "from": "resources/icon.png",
-        "to": "resources/icon.png"
+        "from": "build/icon.png",
+        "to": "icon.png"
       }
     ],
     "directories": {
