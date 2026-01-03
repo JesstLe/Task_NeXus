@@ -339,54 +339,81 @@ const createWindow = () => {
 function createTray() {
   if (tray) return;
 
-  const iconPath = app.isPackaged
-    ? path.join(process.resourcesPath, 'icon.png')
-    : path.join(__dirname, '../build/icon.png');
+  // 确定图标路径
+  let iconPath;
+  if (app.isPackaged) {
+    iconPath = path.join(process.resourcesPath, 'icon.png');
+  } else {
+    iconPath = path.join(__dirname, '../build/icon.png');
+  }
+
+  console.log('Tray icon path:', iconPath);
+
+  // 检查图标文件是否存在
+  if (!fs.existsSync(iconPath)) {
+    console.error('托盘图标文件不存在:', iconPath);
+    return;
+  }
 
   let image;
   try {
     image = nativeImage.createFromPath(iconPath);
+
+    // 检查图标是否为空
+    if (image.isEmpty()) {
+      console.error('托盘图标加载为空:', iconPath);
+      return;
+    }
+
+    // 根据平台调整大小
     if (process.platform === 'darwin') {
       image = image.resize({ width: 16, height: 16 });
-    } else {
-      image = image.resize({ width: 32, height: 32 });
+    } else if (process.platform === 'win32') {
+      // Windows 托盘图标推荐使用 16x16 或 32x32
+      image = image.resize({ width: 16, height: 16 });
     }
   } catch (e) {
-    console.error("加载托盘图标失败", e);
+    console.error("加载托盘图标失败:", e);
     return;
   }
 
-  tray = new Tray(image);
-  tray.setToolTip('Task Nexus');
+  try {
+    tray = new Tray(image);
+    tray.setToolTip('Task Nexus');
 
-  const contextMenu = Menu.buildFromTemplate([
-    { label: '显示主窗口', click: () => mainWindow?.show() },
-    { type: 'separator' },
-    {
-      label: '退出', click: () => {
-        isQuitting = true;
-        app.quit();
+    const contextMenu = Menu.buildFromTemplate([
+      { label: '显示主窗口', click: () => mainWindow?.show() },
+      { type: 'separator' },
+      {
+        label: '退出', click: () => {
+          isQuitting = true;
+          app.quit();
+        }
       }
-    }
-  ]);
+    ]);
 
-  tray.setContextMenu(contextMenu);
+    tray.setContextMenu(contextMenu);
 
-  tray.on('click', () => {
-    if (mainWindow) {
-      if (mainWindow.isVisible()) {
-        if (mainWindow.isFocused()) {
-          mainWindow.hide();
+    tray.on('click', () => {
+      if (mainWindow) {
+        if (mainWindow.isVisible()) {
+          if (mainWindow.isFocused()) {
+            mainWindow.hide();
+          } else {
+            mainWindow.show();
+            mainWindow.focus();
+          }
         } else {
           mainWindow.show();
           mainWindow.focus();
         }
-      } else {
-        mainWindow.show();
-        mainWindow.focus();
       }
-    }
-  });
+    });
+
+    console.log('托盘图标创建成功');
+  } catch (e) {
+    console.error('创建托盘失败:', e);
+  }
 }
 
 app.whenReady().then(() => {
@@ -473,16 +500,15 @@ ipcMain.handle('get-processes', async () => {
             data = [data];
           }
 
-          // Get CPU core count for normalization
-          const cpuCores = os.cpus().length;
-
           const processes = [];
           data.forEach(item => {
             const pid = item.IDProcess;
             let name = item.Name;
-            // Normalize CPU usage: Windows reports total across all cores
-            // Divide by core count to get percentage relative to single core (0-100%)
-            const cpu = (item.PercentProcessorTime || 0) / cpuCores;
+            // Win32_PerfFormattedData_PerfProc_Process.PercentProcessorTime
+            // 已经是归一化的百分比值 (0-100%)
+            // 使用 Math.min 确保不超过 100%（某些极端情况下可能略微超过）
+            const rawCpu = item.PercentProcessorTime || 0;
+            const cpu = Math.min(rawCpu, 100);
 
             if (!name || name === '_Total' || name === 'Idle' || !pid || pid <= 0) return;
 
@@ -518,13 +544,18 @@ ipcMain.handle('get-processes', async () => {
           const lines = stdout.split('\n');
           lines.forEach(line => {
             const trimmed = line.trim();
-            if (!trimmed || trimmed.includes('PID') || trimmed.includes('%CPU')) return;
+            // 跳过空行和标题行
+            if (!trimmed || trimmed.startsWith('PID') || trimmed.includes('%CPU')) return;
 
-            const match = trimmed.match(/^\s*(\d+)\s+([\d.]+)\s+(.+)/);
-            if (match) {
-              const pid = parseInt(match[1], 10);
-              const cpu = parseFloat(match[2]) || 0;
-              const name = path.basename(match[3].trim());
+            // 使用更精确的正则表达式匹配 PID, CPU%, 和命令
+            // 格式: "  PID  %CPU COMM" 或 "1234  12.5 /path/to/command"
+            const parts = trimmed.split(/\s+/);
+            if (parts.length >= 3) {
+              const pid = parseInt(parts[0], 10);
+              const cpu = parseFloat(parts[1]) || 0;
+              // 命令可能包含空格，所以取剩余所有部分
+              const fullPath = parts.slice(2).join(' ');
+              const name = path.basename(fullPath.trim());
 
               if (name && !isNaN(pid) && pid > 0) {
                 processes.push({ pid, name, cpu });

@@ -17,6 +17,12 @@
       "electron/**/*",
       "package.json"
     ],
+    "extraResources": [
+      {
+        "from": "build/icon.png",
+        "to": "icon.png"
+      }
+    ],
     "directories": {
       "output": "release"
     },
@@ -35,7 +41,8 @@
       "artifactName": "${productName}-${version}-Portable.${ext}"
     },
     "mac": {
-      "target": "dmg"
+      "target": "dmg",
+      "icon": "build/icon.png"
     }
   },
   "dependencies": {
