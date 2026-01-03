@@ -6,7 +6,7 @@ import CoreGrid from './components/CoreGrid';
 import ControlBar from './components/ControlBar';
 import SettingsPanel from './components/SettingsPanel';
 import SystemOptimizer from './components/SystemOptimizer';
-import Toast, { ToastContainer, toast } from './components/Toast';
+import Toast, { ToastContainer } from './components/Toast';
 import { Activity, Settings, Zap } from 'lucide-react';
 import { getCpuArchitecture } from './data/cpuDatabase';
 

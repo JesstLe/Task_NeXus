@@ -64,7 +64,10 @@ const DEFAULT_CONFIG = {
     threshold: 80, // 触发内存清理的百分比阈值
     interval: 30,  // 检查间隔 (秒)
     mode: 'standby-only' // 'standby-only' (安全, 清理缓存) | 'working-set' (激进, 压缩后台)
-  }
+  },
+
+  // 后台进程限制列表 - 当游戏运行时，将这些进程的优先级降低到 Idle
+  throttleList: []
 };
 
 let appConfig = { ...DEFAULT_CONFIG };
@@ -127,6 +130,38 @@ function stopProcessMonitor() {
 // --- Background Throttling Logic ---
 let throttledPids = new Map(); // Pid -> Original Priority (default Normal)
 
+// 辅助函数：设置进程优先级（内部使用，非 IPC handler）
+function setProcessPriority(pid, priority) {
+  return new Promise((resolve) => {
+    const isWin = process.platform === 'win32';
+    if (!isWin) {
+      console.warn('[setProcessPriority] 仅支持 Windows');
+      return resolve({ success: false, error: '仅支持 Windows' });
+    }
+
+    const safePid = parseInt(pid, 10);
+    if (!safePid || safePid <= 0) {
+      return resolve({ success: false, error: '无效的进程ID' });
+    }
+
+    const allowed = ['RealTime', 'High', 'AboveNormal', 'Normal', 'BelowNormal', 'Idle'];
+    if (!allowed.includes(priority)) {
+      return resolve({ success: false, error: '无效的优先级' });
+    }
+
+    const cmd = `powershell -Command "try { $p = Get-Process -Id ${safePid} -ErrorAction Stop; $p.PriorityClass = [System.Diagnostics.ProcessPriorityClass]::${priority}; } catch { exit 1 }"`;
+
+    exec(cmd, (error) => {
+      if (error) {
+        console.warn(`[setProcessPriority] Failed for PID ${pid}:`, error.message);
+        resolve({ success: false, error: error.message });
+      } else {
+        resolve({ success: true });
+      }
+    });
+  });
+}
+
 async function checkAndApplyThrottle(processes, gameNames) {
   // Check if any game is running
   let isGameRunning = false;
@@ -160,7 +195,7 @@ async function checkAndApplyThrottle(processes, gameNames) {
       for (const [pid, originalPriority] of throttledPids) {
         // We need to check if process still exists? setProcessPriority handles errors gracefully?
         // Let's just try restoring.
-        setProcessPriority(pid, originalPriority);
+        await setProcessPriority(pid, originalPriority);
       }
       throttledPids.clear();
     }
@@ -1053,67 +1088,9 @@ ipcMain.handle('set-affinity', (event, pid, coreMask, mode) => {
   return setAffinity(pid, coreMask, mode);
 });
 
-// Set Process Priority
+// Set Process Priority (IPC Handler) - 使用统一的辅助函数
 ipcMain.handle('set-process-priority', async (event, { pid, priority }) => {
-  return new Promise((resolve, reject) => {
-    const isWin = process.platform === 'win32';
-
-    // Validate inputs
-    if (!pid || pid <= 0) return reject(new Error('无效的进程ID'));
-    if (!priority) return reject(new Error('未指定优先级'));
-
-    console.log(`Setting priority for PID ${pid} to ${priority}`);
-
-    if (isWin) {
-      // Windows Priority Mapping
-      // Valid values: Idle, BelowNormal, Normal, AboveNormal, High, RealTime
-      const winPriorityMap = {
-        'Low': 'Idle',
-        'BelowNormal': 'BelowNormal',
-        'Normal': 'Normal',
-        'AboveNormal': 'AboveNormal',
-        'High': 'High',
-        'RealTime': 'RealTime'
-      };
-
-      const winPriority = winPriorityMap[priority] || 'Normal';
-
-      // Use PowerShell to set PriorityClass
-      const psCommand = `powershell -NoProfile -Command "(Get-Process -Id ${pid}).PriorityClass = '${winPriority}'"`;
-
-      exec(psCommand, (error, stdout, stderr) => {
-        if (error) {
-          console.error(`Failed to set priority (Win): ${error.message}`);
-          reject(new Error(`设置优先级失败: ${error.message}`));
-        } else {
-          console.log(`Priority set successfully for PID ${pid}`);
-          resolve(true);
-        }
-      });
-    } else {
-      // macOS / Linux Priority Mapping (os.setPriority)
-      // Range: -20 (High) to 19 (Low)
-      const macPriorityMap = {
-        'Low': 19,
-        'BelowNormal': 10,
-        'Normal': 0,
-        'AboveNormal': -5,
-        'High': -10,
-        'RealTime': -15 // Caution with -20
-      };
-
-      const macPriority = macPriorityMap[priority] !== undefined ? macPriorityMap[priority] : 0;
-
-      try {
-        os.setPriority(pid, macPriority);
-        console.log(`Priority set successfully for PID ${pid} to ${macPriority}`);
-        resolve(true);
-      } catch (error) {
-        console.error(`Failed to set priority (Mac): ${error.message}`);
-        reject(new Error(`设置优先级失败: ${error.message}`));
-      }
-    }
-  });
+  return await setProcessPriority(pid, priority);
 });
 
 // --- Power Plan IPC ---
@@ -1343,7 +1320,7 @@ ipcMain.handle('set-setting', (event, key, value) => {
   const allowedKeys = [
     'width', 'height', 'x', 'y',
     'launchOnStartup', 'closeToTray', 'cpuAffinityMode',
-    'defaultRules', 'gameList', 'excludeList', 'smartTrim'
+    'defaultRules', 'gameList', 'excludeList', 'smartTrim', 'throttleList'
   ];
 
   if (allowedKeys.includes(key)) {
@@ -1472,31 +1449,14 @@ foreach($proc in $processes) {
   }
 });
 
-// 设置进程优先级
-ipcMain.handle('set-process-priority', async (event, { pid, priority }) => {
-  if (!pid || !priority) return { success: false, error: '参数缺失' };
-
-  const isWin = process.platform === 'win32';
-  if (!isWin) return { success: false, error: '仅支持 Windows' }; // TODO: implementing renice for linux/mac
-
-  return new Promise((resolve) => {
-    const safePid = parseInt(pid, 10);
-    // Validate Priority Enum Safety
-    const allowed = ['RealTime', 'High', 'AboveNormal', 'Normal', 'BelowNormal', 'Idle'];
-    if (!allowed.includes(priority)) return resolve({ success: false, error: '无效的优先级' });
-
-    const cmd = `powershell -Command "try { $p = Get-Process -Id ${safePid} -ErrorAction Stop; $p.PriorityClass = [System.Diagnostics.ProcessPriorityClass]::${priority}; } catch { exit 1 }"`;
-
-    exec(cmd, (error) => {
-      if (error) resolve({ success: false, error: '设置失败 (可能需要管理员权限)' });
-      else resolve({ success: true });
-    });
-  });
-});
-
-
 ipcMain.handle('get-profiles', () => {
   return appConfig.profiles || [];
+});
+
+ipcMain.on('app-quit', () => {
+  isQuitting = true;
+  stopProcessMonitor();
+  app.quit();
 });
 
 ipcMain.on('window-minimize', () => mainWindow?.minimize());
