@@ -494,41 +494,23 @@ const createWindow = () => {
 function createTray() {
   if (tray) return;
 
-  // 确定图标路径
-  let iconPath;
-  if (app.isPackaged) {
-    iconPath = path.join(process.resourcesPath, 'icon.png');
-  } else {
-    iconPath = path.join(__dirname, '../build/icon.png');
-  }
-
+  // 托盘图标路径
+  const iconPath = path.join(__dirname, '../resources/icon.png');
   console.log('Tray icon path:', iconPath);
-
-  // 检查图标文件是否存在
-  if (!fs.existsSync(iconPath)) {
-    console.error('托盘图标文件不存在:', iconPath);
-    return;
-  }
 
   let image;
   try {
     image = nativeImage.createFromPath(iconPath);
-
-    // 检查图标是否为空
     if (image.isEmpty()) {
-      console.error('托盘图标加载为空:', iconPath);
-      return;
-    }
-
-    // 根据平台调整大小
-    if (process.platform === 'darwin') {
-      image = image.resize({ width: 16, height: 16 });
-    } else if (process.platform === 'win32') {
-      // Windows 托盘图标推荐使用 16x16 或 32x32
+      console.error('托盘图标加载为空 (Icon is empty):', iconPath);
+      // 创建一个空的 16x16 图标避免报错
+      image = nativeImage.createFromBuffer(Buffer.alloc(0));
+    } else {
+      // 统一调整为 small icon for tray (usually 16x16 logic for tray)
       image = image.resize({ width: 16, height: 16 });
     }
   } catch (e) {
-    console.error("加载托盘图标失败:", e);
+    console.error("加载托盘图标出错:", e);
     return;
   }
 
@@ -537,7 +519,14 @@ function createTray() {
     tray.setToolTip('Task Nexus');
 
     const contextMenu = Menu.buildFromTemplate([
-      { label: '显示主窗口', click: () => mainWindow?.show() },
+      {
+        label: '显示主窗口', click: () => {
+          if (mainWindow) {
+            mainWindow.show();
+            if (mainWindow.isMinimized()) mainWindow.restore();
+          }
+        }
+      },
       { type: 'separator' },
       {
         label: '退出', click: () => {
@@ -550,26 +539,13 @@ function createTray() {
     tray.setContextMenu(contextMenu);
 
     tray.on('click', () => {
-      if (mainWindow) {
-        if (mainWindow.isVisible()) {
-          if (mainWindow.isFocused()) {
-            mainWindow.hide();
-          } else {
-            mainWindow.show();
-            mainWindow.focus();
-          }
-        } else {
-          mainWindow.show();
-          mainWindow.focus();
-        }
-      }
+      toggleWindow();
     });
-
-    console.log('托盘图标创建成功');
-  } catch (e) {
-    console.error('创建托盘失败:', e);
+  } catch (err) {
+    console.error("创建托盘对象失败:", err);
   }
 }
+
 
 app.whenReady().then(() => {
   createWindow();
