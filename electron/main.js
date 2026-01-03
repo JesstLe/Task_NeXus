@@ -1292,31 +1292,31 @@ ipcMain.handle('clear-memory', async () => {
     // Windows: 使用 PowerShell 调用系统 API 清空 Standby List
     // 需要管理员权限才能有效
     const psScript = `
-  Add - Type - TypeDefinition @"
-  using System;
-  using System.Runtime.InteropServices;
-  public class MemoryCleaner {
-    [DllImport("psapi.dll")]
-    public static extern bool EmptyWorkingSet(IntPtr hProcess);
+Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+public class MemoryCleaner {
+  [DllImport("psapi.dll")]
+  public static extern bool EmptyWorkingSet(IntPtr hProcess);
 
-    [DllImport("kernel32.dll")]
-    public static extern IntPtr GetCurrentProcess();
-  }
-  "@
-      # 清理当前进程的工作集
-  [MemoryCleaner]:: EmptyWorkingSet([MemoryCleaner]:: GetCurrentProcess())
-      
-      # 尝试调用系统缓存清理
-  $processes = Get - Process | Where - Object { $_.WorkingSet64 - gt 50MB }
-  foreach($proc in $processes) {
-    try {
-      [MemoryCleaner]:: EmptyWorkingSet($proc.Handle)
-    } catch { }
-  }
-  `;
+  [DllImport("kernel32.dll")]
+  public static extern IntPtr GetCurrentProcess();
+}
+"@
+# 清理当前进程的工作集
+[MemoryCleaner]::EmptyWorkingSet([MemoryCleaner]::GetCurrentProcess())
+
+# 尝试调用系统缓存清理
+$processes = Get-Process | Where-Object { $_.WorkingSet64 -gt 50MB }
+foreach($proc in $processes) {
+  try {
+    [MemoryCleaner]::EmptyWorkingSet($proc.Handle)
+  } catch { }
+}
+`;
 
     return new Promise((resolve, reject) => {
-      exec(`powershell - NoProfile - ExecutionPolicy Bypass - Command "${psScript.replace(/" / g, '\\"').replace(/\n/g, ' ')}"`,
+      exec(`powershell -NoProfile -ExecutionPolicy Bypass -Command "${psScript.replace(/"/g, '\\"').replace(/\n/g, ' ')}"`,
         { timeout: 30000 },
         (error, stdout, stderr) => {
           // 等待一小段时间让系统更新内存状态
