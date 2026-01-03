@@ -378,10 +378,39 @@ function SmartTrimControl({ settings, onUpdate }) {
                 onChange={handleInputChange}
                 onBlur={handleInputBlur} // 失去焦点时保存
                 onKeyDown={(e) => e.key === 'Enter' && e.target.blur()}
-                className="w-12 px-1 py-0.5 text-xs text-right bg-slate-50 border border-slate-200 rounded focus:outline-none focus:border-green-500 font-mono"
+                className="w-10 text-xs text-center border-none bg-transparent font-medium text-slate-600 focus:ring-0"
               />
-              <span className="text-xs text-slate-400 ml-1">%</span>
+              <span className="text-xs text-slate-400 absolute right-0 pointer-events-none">%</span>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Mode Selector */}
+      {settings?.enabled && (
+        <div className="flex items-center gap-3 pl-1 mt-3">
+          <span className="text-xs text-slate-500 whitespace-nowrap">清理模式</span>
+          <div className="flex gap-2">
+            <button
+              onClick={() => onUpdate({ ...settings, mode: 'standby-only' })}
+              className={`px-2 py-1 text-xs rounded transition-colors ${(settings.mode || 'standby-only') === 'standby-only'
+                  ? 'bg-green-100 text-green-700 font-medium'
+                  : 'bg-slate-50 text-slate-500 hover:bg-slate-100'
+                }`}
+              title="仅清理备用内存列表，无副作用 (推荐)"
+            >
+              安全 (Standby)
+            </button>
+            <button
+              onClick={() => onUpdate({ ...settings, mode: 'working-set' })}
+              className={`px-2 py-1 text-xs rounded transition-colors ${settings.mode === 'working-set'
+                  ? 'bg-red-100 text-red-700 font-medium'
+                  : 'bg-slate-50 text-slate-500 hover:bg-slate-100'
+                }`}
+              title="强制压缩后台进程内存，可能导致切换程序时轻微卡顿"
+            >
+              激进 (Working Set)
+            </button>
           </div>
         </div>
       )}

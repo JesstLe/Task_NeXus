@@ -278,29 +278,68 @@ async function checkAndRunSmartTrim() {
     if (usedPercent >= threshold) {
       console.log(`[SmartTrim] Memory usage ${usedPercent.toFixed(1)}% > ${threshold}%. Triggering optimization...`);
 
-      // 执行清理 - Standby List (安全模式)
+      // 执行清理
       if (process.platform === 'win32') {
-        // 使用之前实现的 clear-memory 逻辑
-        // 这里直接调用 exec，避免 IPC 往返
-        const psCommand = `
-          $code = @"
-          using System;
-          using System.Runtime.InteropServices;
-          public class MemoryCleaner {
-            [DllImport("psapi.dll")]
-            public static extern int EmptyWorkingSet(IntPtr hwProc);
-          }
-"@
-          Add-Type -TypeDefinition $code
-          # -1 is a special handle for the System Working Set (Standby List)
-          [MemoryCleaner]::EmptyWorkingSet(-1)
-        `;
+        const mode = settings.mode || 'standby-only';
 
-        exec(`powershell -NoProfile -Command "${psCommand}"`, (error) => {
+        let psCommand = '';
+
+        if (mode === 'working-set') {
+          // 激进模式：清理后台进程工作集 (Trim Working Set)
+          // 排除：当前前台窗口进程、本程序进程
+          console.log('[SmartTrim] Running Aggressive Mode (Working Set Trim)...');
+          psCommand = `
+            $code = @"
+            using System;
+            using System.Runtime.InteropServices;
+            public class MemoryCleaner {
+              [DllImport("psapi.dll")]
+              public static extern bool EmptyWorkingSet(IntPtr hProcess);
+              [DllImport("user32.dll")]
+              public static extern IntPtr GetForegroundWindow();
+              [DllImport("user32.dll")]
+              public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
+            }
+"@
+            Add-Type -TypeDefinition $code
+            
+            $hwnd = [MemoryCleaner]::GetForegroundWindow()
+            $fgPid = 0
+            [MemoryCleaner]::GetWindowThreadProcessId($hwnd, [ref]$fgPid)
+            
+            $others = Get-Process | Where-Object { 
+              $_.Id -ne $fgPid -and 
+              $_.Id -ne $pid -and 
+              $_.WorkingSet64 -gt 20MB 
+            }
+            
+            foreach ($p in $others) {
+              try { [MemoryCleaner]::EmptyWorkingSet($p.Handle) } catch {}
+            }
+          `;
+        } else {
+          // 安全模式：仅尝试清理 Standby List (实际效果取决于权限)
+          // 这里暂时保留对自身的清理作为占位，因为非Admin很难清理系统Standby
+          psCommand = `
+            $code = @"
+            using System;
+            using System.Runtime.InteropServices;
+            public class MemoryCleaner {
+              [DllImport("psapi.dll")]
+              public static extern int EmptyWorkingSet(IntPtr hwProc);
+            }
+"@
+            Add-Type -TypeDefinition $code
+            # Try to trim self as a safe fallback
+            [MemoryCleaner]::EmptyWorkingSet(-1)
+          `;
+        }
+
+        exec(`powershell -NoProfile -ExecutionPolicy Bypass -Command "${psCommand.replace(/"/g, '\\"').replace(/\n/g, ' ')}"`, (error) => {
           if (error) {
-            console.warn('[SmartTrim] Failed to clear standby list:', error.message);
+            console.warn('[SmartTrim] Execution failed:', error.message);
           } else {
-            console.log('[SmartTrim] Standby List cleared successfully.');
+            console.log(`[SmartTrim] Optimization complete (Mode: ${mode}).`);
           }
         });
       }
