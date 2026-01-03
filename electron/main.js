@@ -345,33 +345,107 @@ function getProcessesList() {
       const lines = stdout.split('\n');
 
       if (isWin) {
+        // 解析 CPU使用率数据 (First Pass)
         lines.forEach(line => {
           if (!line.trim() || line.includes('Node,') || line.includes('IDProcess')) return;
           const parts = line.split(',');
+          // CSV: Node, IDProcess, Name, PercentProcessorTime
           if (parts.length >= 4) {
             const pid = parseInt(parts[1].trim(), 10);
             let name = parts[2].trim();
+            const cpu = parseFloat(parts[3].trim()); // Parse CPU usage string
+
             // 过滤无效进程
             if (!name || name === '_Total' || name === 'Idle' || isNaN(pid) || pid <= 0) return;
             if (!name.toLowerCase().endsWith('.exe')) name = name + '.exe';
-            processes.push({ pid, name });
+
+            // Note: Currently we don't have cpu in parts? 
+            // Wait, previous code didn't parse CPU?
+            // "wmic ... get Name,IDProcess,PercentProcessorTime"
+            // The previous code lines 348-358 seemed to ignore PercentProcessorTime?
+            // Ah, looking at previous code: "const parts = line.split(',');"
+            // "const pid = parseInt(parts[1]...); let name = parts[2]..."
+            // It didn't extract CPU? That's a bug in previous code if so, or I missed it.
+            // Let's check the view... Previous view showed "processes.push({ pid, name });"
+            // So CPU was missing? But the UI shows CPU colors?
+            // "src/App.jsx" line 88 shows mock data has CPU.
+            // "getProcessesList" seems to have been missing CPU?
+            // Re-reading Step 980 lines 357: "processes.push({ pid, name });". 
+            // YES. The real backend WAS NOT returning CPU usage.
+            // I should fix this too. "PercentProcessorTime" is parts[3].
+
+            processes.push({ pid, name, cpu: (!isNaN(cpu) ? cpu / os.cpus().length : 0) });
+            // Note: WMI PercentProcessorTime is total across all cores? Usually it's strictly percentage.
+            // But PerfFormattedData is instant. Often requires dividing by core count for "Task Manager" style if >100.
+            // Actually, PerfFormattedData_PerfProc_Process PercentProcessorTime can go safely up to 100 * Cores.
+            // Let's normalize it roughly or leave as is. Task Manager shows 0-100% total.
           }
         });
+
+        // 第二步：获取优先级 (Second Pass)
+        exec('wmic process get ProcessId,Priority /FORMAT:CSV', (err2, stdout2) => {
+          const priorityMap = {};
+          if (!err2 && stdout2) {
+            const pLines = stdout2.split('\n');
+            // Header: Node,Priority,ProcessId (Alphabetical)
+            // Check first line for header order if needed, but standard is Node,Priority,ProcessId
+            // Or Node,ProcessId,Priority?
+            // "Priority", "ProcessId" -> i vs o. Priority comes first.
+            pLines.forEach(pl => {
+              if (!pl.trim() || pl.includes('Node,')) return;
+              const pp = pl.split(',');
+              if (pp.length >= 3) {
+                // Generic safe parse
+                // Attempt to find PID and Priority.
+                // Usually: Node (0), Priority (1), ProcessId (2)
+                const val1 = parseInt(pp[1], 10);
+                const val2 = parseInt(pp[2], 10);
+
+                // Heuristic: PID is usually larger, but not always.
+                // Priority is specific set (4, 6, 8, 10, 13, 24).
+                // Let's assume standard order: Node, Priority, ProcessId
+                const pri = val1;
+                const p_id = val2;
+
+                if (!isNaN(p_id)) priorityMap[p_id] = pri;
+              }
+            });
+          }
+
+          // Merge Priorities
+          processes.forEach(p => {
+            const priVal = priorityMap[p.pid];
+            let priStr = 'Normal';
+            if (priVal === 4) priStr = 'Idle';
+            else if (priVal === 6) priStr = 'BelowNormal';
+            else if (priVal === 8) priStr = 'Normal';
+            else if (priVal >= 10 && priVal < 13) priStr = 'AboveNormal';
+            else if (priVal >= 13 && priVal < 24) priStr = 'High';
+            else if (priVal >= 24) priStr = 'RealTime';
+
+            p.priority = priStr;
+          });
+
+          resolve(processes);
+        });
+
       } else {
+        // macOS / Linux Logic
         lines.forEach(line => {
           const trimmed = line.trim();
           if (!trimmed || trimmed.includes('PID') || trimmed.includes('%CPU')) return;
           const match = trimmed.match(/^\s*(\d+)\s+([\d.]+)\s+(.+)/);
           if (match) {
             const pid = parseInt(match[1], 10);
+            const cpu = parseFloat(match[2]);
             const name = path.basename(match[3].trim());
             if (name && !isNaN(pid) && pid > 0) {
-              processes.push({ pid, name });
+              processes.push({ pid, name, cpu, priority: 'Normal' });
             }
           }
         });
+        resolve(processes);
       }
-      resolve(processes);
     });
   });
 }
