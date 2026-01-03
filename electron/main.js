@@ -161,18 +161,35 @@ function updateLoginItemSettings() {
 
 // --- 进程监控 ---
 
-function startProcessMonitor() {
-  if (monitorInterval) clearInterval(monitorInterval);
+let isMonitorRunning = false;
+let monitorTimer = null;
 
-  // 每 5 秒扫描一次
-  monitorInterval = setInterval(scanAndApplyProfiles, 5000);
-  // 立即执行一次
-  scanAndApplyProfiles();
+function startProcessMonitor() {
+  if (isMonitorRunning) return;
+  isMonitorRunning = true;
+
+  const loop = async () => {
+    if (!isMonitorRunning) return;
+    try {
+      await scanAndApplyProfiles();
+    } catch (err) {
+      console.error('Scan failed:', err);
+    }
+    if (isMonitorRunning) {
+      monitorTimer = setTimeout(loop, 5000);
+    }
+  };
+
+  // 立即执行一次，然后进入循环
+  loop();
 }
 
 function stopProcessMonitor() {
-  if (monitorInterval) clearInterval(monitorInterval);
-  monitorInterval = null;
+  isMonitorRunning = false;
+  if (monitorTimer) {
+    clearTimeout(monitorTimer);
+    monitorTimer = null;
+  }
 }
 
 // --- Background Throttling Logic ---
