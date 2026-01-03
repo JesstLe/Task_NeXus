@@ -530,12 +530,14 @@ export default function SettingsPanel({
   primaryCore,
   onPrimaryCoreChange,
   coreCount = 16,
+  selectedCores = [],
   settings = {},
   onSettingChange = () => { },
   onRemoveProfile = () => { },
   processes = []
 }) {
-  const coreOptions = Array.from({ length: coreCount }, (_, i) => i);
+  // 优先核心只能从已选择的核心中选择
+  const availableCores = selectedCores.length > 0 ? selectedCores.sort((a, b) => a - b) : [];
 
   const modes = [
     { id: 'dynamic', label: '自动分配', icon: Zap, desc: '正常优先级' },
@@ -547,24 +549,30 @@ export default function SettingsPanel({
   return (
     <div className="space-y-4">
       {/* 优先核心选择 */}
-      <div className="glass rounded-2xl p-5 shadow-soft flex items-center justify-between">
-        <div>
-          <h4 className="font-medium text-slate-700">优先核心</h4>
-          <p className="text-xs text-slate-400 mt-0.5">指定调度器首选线程</p>
+      <div className="glass rounded-2xl p-5 shadow-soft">
+        <div className="flex items-center justify-between">
+          <div>
+            <h4 className="font-medium text-slate-700">优先核心</h4>
+            <p className="text-xs text-slate-400 mt-0.5">游戏优先运行在指定核心，其他核心辅助</p>
+          </div>
+          <div className="relative">
+            <select
+              className="appearance-none pl-4 pr-10 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-600 outline-none focus:ring-2 focus:ring-violet-500/30 cursor-pointer hover:bg-slate-100 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              value={primaryCore}
+              onChange={(e) => onPrimaryCoreChange(e.target.value)}
+              disabled={availableCores.length === 0}
+            >
+              <option value="auto">自动</option>
+              {availableCores.map((i) => (
+                <option key={i} value={i}>核心 {i}</option>
+              ))}
+            </select>
+            <ChevronDown size={14} className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400" />
+          </div>
         </div>
-        <div className="relative">
-          <select
-            className="appearance-none pl-4 pr-10 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-600 outline-none focus:ring-2 focus:ring-violet-500/30 cursor-pointer hover:bg-slate-100 transition-colors"
-            value={primaryCore}
-            onChange={(e) => onPrimaryCoreChange(e.target.value)}
-          >
-            <option value="auto">自动</option>
-            {coreOptions.map((i) => (
-              <option key={i} value={i}>核心 {i}</option>
-            ))}
-          </select>
-          <ChevronDown size={14} className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400" />
-        </div>
+        {availableCores.length === 0 && (
+          <p className="text-xs text-amber-600 mt-2">请先在"核心调度"页面选择核心</p>
+        )}
       </div>
 
       {/* 模式选择 */}

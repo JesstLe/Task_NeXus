@@ -74,6 +74,17 @@ function App() {
     init();
   }, []);
 
+  // 当核心选择改变时，检查优先核心是否仍然有效
+  useEffect(() => {
+    if (primaryCore !== 'auto' && selectedCores.length > 0) {
+      const primaryIdx = parseInt(primaryCore, 10);
+      if (!isNaN(primaryIdx) && !selectedCores.includes(primaryIdx)) {
+        // 优先核心不在新的选择列表中，重置为自动
+        setPrimaryCore('auto');
+      }
+    }
+  }, [selectedCores, primaryCore]);
+
   const handleScan = async () => {
     setScanning(true);
     setError(null);
@@ -174,11 +185,18 @@ function App() {
       return;
     }
 
+    // 优先核心必须在已选择的核心中
     let coresToUse = [...selectedCores];
+    
+    // 如果指定了优先核心，验证它是否在已选择的核心中
+    let primaryCoreValue = null;
     if (primaryCore !== 'auto') {
       const primaryIdx = parseInt(primaryCore, 10);
-      if (!coresToUse.includes(primaryIdx)) {
-        coresToUse.unshift(primaryIdx);
+      if (coresToUse.includes(primaryIdx)) {
+        primaryCoreValue = primaryIdx;
+      } else {
+        showToast('优先核心必须在已选择的核心中', 'warning');
+        return;
       }
     }
 
@@ -189,8 +207,8 @@ function App() {
 
     try {
       if (window.electron) {
-        // 1. 设置 CPU 亲和性
-        const result = await window.electron.setAffinity(selectedPid, mask.toString(), mode);
+        // 1. 设置 CPU 亲和性（传递优先核心）
+        const result = await window.electron.setAffinity(selectedPid, mask.toString(), mode, primaryCoreValue);
 
         // 2. 设置进程优先级
         let prioritySuccess = true;
@@ -235,11 +253,15 @@ function App() {
       return;
     }
 
+    // 优先核心必须在已选择的核心中
     let coresToUse = [...selectedCores];
+    
+    // 验证优先核心
+    let primaryCoreValue = null;
     if (primaryCore !== 'auto') {
       const primaryIdx = parseInt(primaryCore, 10);
-      if (!coresToUse.includes(primaryIdx)) {
-        coresToUse.unshift(primaryIdx);
+      if (coresToUse.includes(primaryIdx)) {
+        primaryCoreValue = primaryIdx;
       }
     }
 
@@ -252,7 +274,8 @@ function App() {
       name: process.name,
       affinity: mask.toString(),
       mode: mode,
-      priority: priority // 保存优先级
+      priority: priority, // 保存优先级
+      primaryCore: primaryCoreValue // 保存优先核心
     };
 
     try {
@@ -416,6 +439,7 @@ function App() {
               primaryCore={primaryCore}
               onPrimaryCoreChange={setPrimaryCore}
               coreCount={coreCount}
+              selectedCores={selectedCores}
               settings={settings}
               onSettingChange={handleSettingChange}
               onRemoveProfile={handleRemoveProfile}

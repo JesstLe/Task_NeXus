@@ -387,8 +387,8 @@ async function checkAndRunSmartTrim() {
 }
 
 // 辅助函数：应用亲和性和优先级
-function applyAffinityAndPriority(pid, mask, mode, priority) {
-  setAffinity(pid, mask, mode)
+function applyAffinityAndPriority(pid, mask, mode, priority, primaryCore = null) {
+  setAffinity(pid, mask, mode, primaryCore)
     .then(result => {
       if (result.success) {
         console.log(`[Auto] Successfully applied to PID ${pid}`);
@@ -535,7 +535,8 @@ function getProcessesList() {
 }
 
 // 提取 setAffinity 逻辑为独立函数以便重用
-function setAffinity(pid, coreMask, mode = 'dynamic') {
+// primaryCore: 优先核心索引（可选），如果指定，将主线程绑定到该核心
+function setAffinity(pid, coreMask, mode = 'dynamic', primaryCore = null) {
   return new Promise((resolve) => {
     // 验证 PID
     if (!Number.isInteger(pid) || pid <= 0) {
@@ -601,6 +602,68 @@ function setAffinity(pid, coreMask, mode = 'dynamic') {
       const safePid = Math.floor(pid);
       const safeMask = finalMask.toString();
 
+      // 如果指定了优先核心，使用线程级别的亲和性设置
+      if (primaryCore !== null && primaryCore !== undefined && primaryCore !== 'auto') {
+        const primaryIdx = parseInt(primaryCore, 10);
+        if (!isNaN(primaryIdx) && primaryIdx >= 0 && primaryIdx < 64) {
+          // 优先核心掩码
+          const primaryMask = (1n << BigInt(primaryIdx)).toString();
+          
+          // 使用 PowerShell 设置进程亲和性和优先级，然后设置主线程亲和性
+          const cmd = `
+$code = @"
+using System;
+using System.Diagnostics;
+using System.Runtime.InteropServices;
+public class AffinitySetter {
+  [DllImport("kernel32.dll")]
+  public static extern IntPtr OpenThread(int dwDesiredAccess, bool bInheritHandle, int dwThreadId);
+  [DllImport("kernel32.dll")]
+  public static extern IntPtr SetThreadAffinityMask(IntPtr hThread, IntPtr dwThreadAffinityMask);
+  [DllImport("kernel32.dll")]
+  public static extern bool CloseHandle(IntPtr hObject);
+  const int THREAD_SET_INFORMATION = 0x0200;
+}
+"@
+Add-Type -TypeDefinition $code
+
+try {
+  $Process = Get-Process -Id ${safePid} -ErrorAction Stop
+  
+  # 设置进程级别的亲和性（所有线程都可以在允许的核心上运行）
+  $Process.ProcessorAffinity = ${safeMask}
+  $Process.PriorityClass = [System.Diagnostics.ProcessPriorityClass]::${priorityClass}
+  
+  # 设置主线程（第一个线程）到优先核心
+  if ($Process.Threads.Count -gt 0) {
+    $mainThread = $Process.Threads[0]
+    $hThread = [AffinitySetter]::OpenThread([AffinitySetter]::THREAD_SET_INFORMATION, $false, $mainThread.Id)
+    if ($hThread -ne [IntPtr]::Zero) {
+      $primaryMask = [IntPtr]::new(${primaryMask})
+      [AffinitySetter]::SetThreadAffinityMask($hThread, $primaryMask) | Out-Null
+      [AffinitySetter]::CloseHandle($hThread) | Out-Null
+    }
+  }
+  
+  Write-Output 'Success'
+} catch {
+  Write-Error $_.Exception.Message
+  exit 1
+}`;
+
+          exec(`powershell -NoProfile -ExecutionPolicy Bypass -Command "${cmd.replace(/"/g, '\\"').replace(/\n/g, ' ')}"`, { timeout: 5000 }, (error, stdout, stderr) => {
+            if (error) {
+              const errorMsg = stderr && stderr.trim() ? stderr.trim().split('\n').pop() : error.message;
+              resolve({ success: false, error: errorMsg || '设置失败' });
+            } else {
+              resolve({ success: true });
+            }
+          });
+          return;
+        }
+      }
+
+      // 没有优先核心，使用标准的进程级别亲和性设置
       const cmd = `powershell -Command "try { $Process = Get-Process -Id ${safePid} -ErrorAction Stop; $Process.ProcessorAffinity = ${safeMask}; $Process.PriorityClass = [System.Diagnostics.ProcessPriorityClass]::${priorityClass}; Write-Output 'Success' } catch { Write-Error $_.Exception.Message; exit 1 }"`;
 
       exec(cmd, { timeout: 5000 }, (error, stdout, stderr) => {
@@ -612,7 +675,7 @@ function setAffinity(pid, coreMask, mode = 'dynamic') {
         }
       });
     } else {
-      console.log(`[模拟模式] Auto-Set: Mode=${mode}, PID=${pid}, Mask=${coreMask}`);
+      console.log(`[模拟模式] Auto-Set: Mode=${mode}, PID=${pid}, Mask=${coreMask}, PrimaryCore=${primaryCore}`);
       resolve({ success: true, message: "模拟执行成功" });
     }
   });
@@ -1084,8 +1147,9 @@ function fallbackTasklist(resolve, reject) {
   });
 }
 
-ipcMain.handle('set-affinity', (event, pid, coreMask, mode) => {
-  return setAffinity(pid, coreMask, mode);
+// 设置亲和性（支持优先核心）
+ipcMain.handle('set-affinity', async (event, pid, coreMask, mode, primaryCore = null) => {
+  return await setAffinity(pid, coreMask, mode, primaryCore);
 });
 
 // Set Process Priority (IPC Handler) - 使用统一的辅助函数

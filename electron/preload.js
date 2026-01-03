@@ -3,7 +3,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('electron', {
   getCpuInfo: () => ipcRenderer.invoke('get-cpu-info'),
   getProcesses: () => ipcRenderer.invoke('get-processes'),
-  setAffinity: (pid, coreMask, mode) => ipcRenderer.invoke('set-affinity', pid, coreMask, mode),
+  setAffinity: (pid, coreMask, mode, primaryCore) => ipcRenderer.invoke('set-affinity', pid, coreMask, mode, primaryCore),
   minimize: () => ipcRenderer.send('window-minimize'),
   toggleMaximize: () => ipcRenderer.send('window-toggle-maximize'),
   // 使用 quit 完全退出应用
