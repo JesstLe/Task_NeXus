@@ -341,33 +341,33 @@ function App() {
 
       {/* Tab Navigation */}
       <div className="flex justify-center mt-4 mb-2">
-        <div className="bg-white/50 backdrop-blur-md p-1 rounded-xl flex gap-1 shadow-sm border border-slate-200/50">
+        <div className="bg-white/50 backdrop-blur-md p-1 rounded-xl flex gap-3 shadow-sm border border-slate-200/50">
           <button
             onClick={() => setActiveTab('dashboard')}
-            className={`px - 4 py - 2 rounded - lg text - sm font - medium transition - all flex items - center gap - 2 ${activeTab === 'dashboard'
-                ? 'bg-violet-500 text-white shadow-md shadow-violet-500/20'
-                : 'text-slate-500 hover:bg-slate-100'
-              } `}
+            className={`px-4 py-2 rounded-lg text-sm font-medium transition-all flex items-center gap-2 ${activeTab === 'dashboard'
+              ? 'bg-violet-500 text-white shadow-md shadow-violet-500/20'
+              : 'text-slate-500 hover:bg-slate-100'
+              }`}
           >
             <Activity size={16} />
             <span>核心调度</span>
           </button>
           <button
             onClick={() => setActiveTab('settings')}
-            className={`px - 4 py - 2 rounded - lg text - sm font - medium transition - all flex items - center gap - 2 ${activeTab === 'settings'
-                ? 'bg-violet-500 text-white shadow-md shadow-violet-500/20'
-                : 'text-slate-500 hover:bg-slate-100'
-              } `}
+            className={`px-4 py-2 rounded-lg text-sm font-medium transition-all flex items-center gap-2 ${activeTab === 'settings'
+              ? 'bg-violet-500 text-white shadow-md shadow-violet-500/20'
+              : 'text-slate-500 hover:bg-slate-100'
+              }`}
           >
             <Settings size={16} />
             <span>游戏模式</span>
           </button>
           <button
             onClick={() => setActiveTab('optimizer')}
-            className={`px - 4 py - 2 rounded - lg text - sm font - medium transition - all flex items - center gap - 2 ${activeTab === 'optimizer'
-                ? 'bg-violet-500 text-white shadow-md shadow-violet-500/20'
-                : 'text-slate-500 hover:bg-slate-100'
-              } `}
+            className={`px-4 py-2 rounded-lg text-sm font-medium transition-all flex items-center gap-2 ${activeTab === 'optimizer'
+              ? 'bg-violet-500 text-white shadow-md shadow-violet-500/20'
+              : 'text-slate-500 hover:bg-slate-100'
+              }`}
           >
             <Zap size={16} />
             <span>一键优化</span>
