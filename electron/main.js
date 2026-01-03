@@ -581,55 +581,98 @@ function getProcessesList(options = { includePriority: true }) {
           }
         });
 
-        // 优化：如果不需要优先级，直接返回
-        if (!options.includePriority) {
+        if (!options.includePriority && !options.includePath) {
           resolve(processes);
           return;
         }
 
-        // 第二步：获取优先级 (Second Pass)
-        // 这一步比较重，仅当 UI 需要显示时才调用
-        exec('wmic process get ProcessId,Priority /FORMAT:CSV', (err2, stdout2) => {
-          const priorityMap = {};
-          if (!err2 && stdout2) {
-            const pLines = stdout2.split('\n');
-            pLines.forEach(pl => {
-              if (!pl.trim() || pl.includes('Node,')) return;
-              const pp = pl.split(',');
-              if (pp.length >= 3) {
-                // wmic output varies by locale sometimes, but FORMAT:CSV is fairly stable.
-                // Usually: Node, Priority, ProcessId or Node, ProcessId, Priority?
-                // Standard: Node, Priority, ProcessId.
-                const val1 = parseInt(pp[1], 10);
-                const val2 = parseInt(pp[2], 10);
-                // Heuristic: Priority values are small (4-32), PID can be large.
-                // But ProcessId can be small too.
-                // Let's rely on standard wmic output order for "get ProcessId,Priority"
-                // If we request "ProcessId,Priority", CSV order is alphabetical by property name!
-                // Priority (P), ProcessId (P)... same letter.
-                // But wait, "Priority" vs "ProcessId". r vs r. o vs o. c vs i.
-                // "Priority" < "ProcessId"? No. i < o. "Priority" comes BEFORE "ProcessId".
-                // So: Node, Priority, ProcessId.
-                const pri = val1;
-                const p_id = val2;
+        const promises = [];
 
-                if (!isNaN(p_id)) priorityMap[p_id] = pri;
+        // Task 1: Priority
+        if (options.includePriority) {
+          promises.push(new Promise(res => {
+            exec('wmic process get ProcessId,Priority /FORMAT:CSV', (err2, stdout2) => {
+              const priorityMap = {};
+              if (!err2 && stdout2) {
+                const pLines = stdout2.split('\n');
+                pLines.forEach(pl => {
+                  if (!pl.trim() || pl.includes('Node,')) return;
+                  const pp = pl.split(',');
+                  if (pp.length >= 3) {
+                    const val1 = parseInt(pp[1], 10);
+                    const val2 = parseInt(pp[2], 10);
+                    // Node, Priority, ProcessId
+                    const pri = val1;
+                    const p_id = val2;
+                    if (!isNaN(p_id)) priorityMap[p_id] = pri;
+                  }
+                });
               }
+              res({ type: 'priority', data: priorityMap });
             });
-          }
+          }));
+        }
 
-          // Merge Priorities
+        // Task 2: Path (Fix for UI Crash)
+        if (options.includePath) {
+          promises.push(new Promise(res => {
+            exec('wmic process get ProcessId,ExecutablePath /FORMAT:CSV', (err3, stdout3) => {
+              const pathMap = {};
+              if (!err3 && stdout3) {
+                const lines3 = stdout3.split('\n');
+                lines3.forEach(l => {
+                  if (!l.trim() || l.includes('Node,')) return;
+                  // Node, ExecutablePath, ProcessId
+                  // CSV parsing is tricky if path contains commas.
+                  // Wmic CSV: Node,Value,ID
+                  // Logic: Split by comma but handle potential path issues?
+                  // Wmic usually quotes paths? No.
+                  // Simple split might fail.
+                  // Better: Last column is PID. First is Node. Middle is Path.
+                  // But let's try strict split first.
+                  // Wait, wmic csv format: Node,ExecutablePath,ProcessId
+                  const parts = l.split(',');
+                  if (parts.length >= 3) {
+                    const pid = parseInt(parts[parts.length - 1], 10);
+                    // Reconstruct path from parts[1] to parts[length-2]
+                    const pathVal = parts.slice(1, parts.length - 1).join(',');
+                    if (!isNaN(pid)) pathMap[pid] = pathVal;
+                  }
+                });
+              }
+              res({ type: 'path', data: pathMap });
+            });
+          }));
+        }
+
+        Promise.all(promises).then(results => {
+          let priorityMap = {};
+          let pathMap = {};
+
+          results.forEach(r => {
+            if (r.type === 'priority') priorityMap = r.data;
+            if (r.type === 'path') pathMap = r.data;
+          });
+
           processes.forEach(p => {
-            const priVal = priorityMap[p.pid];
-            let priStr = 'Normal';
-            if (priVal === 4) priStr = 'Idle';
-            else if (priVal === 6) priStr = 'BelowNormal';
-            else if (priVal === 8) priStr = 'Normal';
-            else if (priVal >= 10 && priVal < 13) priStr = 'AboveNormal';
-            else if (priVal >= 13 && priVal < 24) priStr = 'High';
-            else if (priVal >= 24) priStr = 'RealTime';
+            // Apply Priority
+            if (options.includePriority) {
+              const priVal = priorityMap[p.pid];
+              let priStr = 'Normal';
+              if (priVal === 4) priStr = 'Idle';
+              else if (priVal === 6) priStr = 'BelowNormal';
+              else if (priVal === 8) priStr = 'Normal';
+              else if (priVal >= 10 && priVal < 13) priStr = 'AboveNormal';
+              else if (priVal >= 13 && priVal < 24) priStr = 'High';
+              else if (priVal >= 24) priStr = 'RealTime';
+              p.priority = priStr;
+            }
 
-            p.priority = priStr;
+            // Apply Path
+            if (options.includePath) {
+              p.path = pathMap[p.pid] || '';
+              p.version = ''; // Placeholder if needed
+            }
           });
 
           resolve(processes);
@@ -1159,9 +1202,8 @@ ipcMain.handle('get-cpu-info', () => {
 });
 
 ipcMain.handle('get-processes', async () => {
-  // UI needs Priority to display colors
-  // This uses the optimized wmic helper instead of heavy PowerShell
-  return await getProcessesList({ includePriority: true }).catch(err => {
+  // UI needs Priority + Path (for game detection/icons)
+  return await getProcessesList({ includePriority: true, includePath: true }).catch(err => {
     writeLog('WARN', `[IPC] get-processes failed: ${err.message}`);
     return [];
   });
