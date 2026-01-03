@@ -691,6 +691,52 @@ export default function SettingsPanel({
         )}
       </div>
 
+      {/* ProBalance */}
+      <div className="glass rounded-2xl p-5 shadow-soft">
+        <div className="flex items-center justify-between mb-2">
+          <div>
+            <h4 className="font-medium text-slate-700">ProBalance</h4>
+            <p className="text-xs text-slate-400 mt-0.5">当游戏运行时，自动压制高负载后台进程 (防止卡顿)</p>
+          </div>
+          <label className="relative inline-flex items-center cursor-pointer">
+            <input
+              type="checkbox"
+              checked={!!settings.proBalance?.enabled}
+              onChange={(e) => onSettingChange('proBalance', {
+                ...settings.proBalance,
+                enabled: e.target.checked
+              })}
+              className="sr-only peer"
+            />
+            <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-violet-500"></div>
+          </label>
+        </div>
+
+        {/* Threshold Slider */}
+        {settings.proBalance?.enabled && (
+          <div className="flex items-center gap-3 mt-3 pt-3 border-t border-slate-100">
+            <span className="text-xs text-slate-500 whitespace-nowrap">触发阈值 (CPU %)</span>
+            <div className="flex-1 flex items-center gap-2">
+              <input
+                type="range"
+                min="5"
+                max="50"
+                step="1"
+                value={settings.proBalance?.cpuThreshold || 20}
+                onChange={(e) => onSettingChange('proBalance', {
+                  ...settings.proBalance,
+                  cpuThreshold: parseInt(e.target.value)
+                })}
+                className="flex-1 h-1.5 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-violet-500"
+              />
+              <span className="w-8 text-xs text-right font-mono text-slate-600">
+                {settings.proBalance?.cpuThreshold || 20}%
+              </span>
+            </div>
+          </div>
+        )}
+      </div>
+
       {/* 内存清理 */}
       <div className="glass rounded-2xl p-5 shadow-soft">
         <div className="flex items-center justify-between mb-2">
