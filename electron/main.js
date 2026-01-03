@@ -307,6 +307,14 @@ const createWindow = () => {
   mainWindow.on('resize', debouncedSaveState);
   mainWindow.on('move', debouncedSaveState);
 
+  // 发送窗口状态变更事件
+  mainWindow.on('maximize', () => {
+    mainWindow.webContents.send('window-maximized-state', true);
+  });
+  mainWindow.on('unmaximize', () => {
+    mainWindow.webContents.send('window-maximized-state', false);
+  });
+
   mainWindow.on('close', (event) => {
     if (!isQuitting && appConfig.closeToTray) {
       event.preventDefault();
@@ -426,60 +434,128 @@ ipcMain.handle('get-cpu-info', () => {
 });
 
 ipcMain.handle('get-processes', async () => {
-  // 复用 getProcessesList 但需要解析百分比等完整信息
-  // 这里为了保持兼容性，还是调用 exec 完整逻辑
   return new Promise((resolve, reject) => {
     const isWin = process.platform === 'win32';
-    const cmd = isWin
-      ? 'wmic path Win32_PerfFormattedData_PerfProc_Process get Name,IDProcess,PercentProcessorTime /FORMAT:CSV'
-      : 'ps -ax -o pid,%cpu,comm';
 
-    exec(cmd, { timeout: 15000 }, (error, stdout, stderr) => {
-      if (error) {
-        console.error(`进程扫描错误: ${error.message}`);
-        reject(new Error(`进程扫描失败: ${error.message}`));
-        return;
-      }
+    if (isWin) {
+      // Use PowerShell to get process info in JSON format (ID, Name, PercentProcessorTime)
+      // Get-CimInstance is more modern and reliable than wmic
+      const psCommand = `powershell -NoProfile -Command "try { Get-CimInstance Win32_PerfFormattedData_PerfProc_Process | Select-Object Name,IDProcess,PercentProcessorTime | ConvertTo-Json -Compress } catch { Write-Output '[]' }"`;
 
-      try {
-        const processes = [];
-        const lines = stdout.split('\n');
+      // Increase maxBuffer for large process lists
+      exec(psCommand, { timeout: 15000, maxBuffer: 1024 * 1024 * 5 }, (error, stdout, stderr) => {
+        if (error) {
+          console.error('PowerShell Scan Failed:', error.message);
+          return fallbackTasklist(resolve, reject);
+        }
 
-        if (isWin) {
-          lines.forEach(line => {
-            if (!line.trim() || line.includes('Node,') || line.includes('IDProcess')) return;
-            const parts = line.split(',');
-            if (parts.length >= 4) {
-              const pid = parseInt(parts[1].trim(), 10);
-              let name = parts[2].trim();
-              const cpu = parseFloat(parts[3].trim()) || 0;
-              if (!name || name === '_Total' || name === 'Idle' || isNaN(pid) || pid <= 0) return;
-              if (!name.toLowerCase().endsWith('.exe')) name = name + '.exe';
-              processes.push({ pid, name, cpu });
+        try {
+          const rawOutput = stdout.trim();
+          if (!rawOutput) {
+            return resolve([]);
+          }
+
+          let data;
+          try {
+            data = JSON.parse(rawOutput);
+          } catch (e) {
+            console.error("JSON Parse Error:", e);
+            return fallbackTasklist(resolve, reject);
+          }
+
+          // Convert single object to array if needed
+          if (!Array.isArray(data)) {
+            data = [data];
+          }
+
+          const processes = [];
+          data.forEach(item => {
+            const pid = item.IDProcess;
+            let name = item.Name;
+            const cpu = item.PercentProcessorTime || 0;
+
+            if (!name || name === '_Total' || name === 'Idle' || !pid || pid <= 0) return;
+
+            // Normalize names (remove #1, #2 suffix from WMI)
+            name = name.replace(/#\d+$/, '');
+
+            if (!name.toLowerCase().endsWith('.exe')) {
+              name = name + '.exe';
             }
+
+            // Deduplicate logic could be added here if needed, but for now we push all
+            processes.push({ pid, name, cpu });
           });
-        } else {
+
+          // Sort by CPU usage desc
+          processes.sort((a, b) => b.cpu - a.cpu);
+          resolve(processes);
+        } catch (parseError) {
+          console.error('Parse Process List Failed:', parseError);
+          fallbackTasklist(resolve, reject);
+        }
+      });
+    } else {
+      // macOS / Linux Logic
+      const cmd = 'ps -ax -o pid,%cpu,comm';
+      exec(cmd, { timeout: 15000, maxBuffer: 1024 * 1024 * 5 }, (error, stdout, stderr) => {
+        if (error) {
+          reject(new Error(`Process scan failed: ${error.message}`));
+          return;
+        }
+        try {
+          const processes = [];
+          const lines = stdout.split('\n');
           lines.forEach(line => {
             const trimmed = line.trim();
             if (!trimmed || trimmed.includes('PID') || trimmed.includes('%CPU')) return;
+
             const match = trimmed.match(/^\s*(\d+)\s+([\d.]+)\s+(.+)/);
             if (match) {
               const pid = parseInt(match[1], 10);
               const cpu = parseFloat(match[2]) || 0;
               const name = path.basename(match[3].trim());
-              if (name && !isNaN(pid) && pid > 0) processes.push({ pid, name, cpu });
+
+              if (name && !isNaN(pid) && pid > 0) {
+                processes.push({ pid, name, cpu });
+              }
             }
           });
+          processes.sort((a, b) => b.cpu - a.cpu);
+          resolve(processes);
+        } catch (e) {
+          reject(e);
         }
-        processes.sort((a, b) => b.cpu - a.cpu);
-        resolve(processes);
-      } catch (parseError) {
-        console.error('解析进程列表失败:', parseError);
-        reject(new Error(`解析进程列表失败: ${parseError.message}`));
-      }
-    });
+      });
+    }
   });
 });
+
+function fallbackTasklist(resolve, reject) {
+  // Fallback: use tasklist (no CPU %)
+  exec('tasklist /FO CSV /NH', (error, stdout, stderr) => {
+    if (error) {
+      // Even fallback failed
+      console.error("Fallback tasklist failed:", error);
+      resolve([]); // Return empty rather than crash
+      return;
+    }
+    const processes = [];
+    const lines = stdout.split('\n');
+    lines.forEach(line => {
+      const parts = line.split(',');
+      if (parts.length >= 2) {
+        // "Image Name","PID", ...
+        const name = parts[0].replace(/"/g, '').trim();
+        const pid = parseInt(parts[1].replace(/"/g, ''), 10);
+        if (name && pid > 0) {
+          processes.push({ pid, name, cpu: 0 });
+        }
+      }
+    });
+    resolve(processes);
+  });
+}
 
 ipcMain.handle('set-affinity', (event, pid, coreMask, mode) => {
   return setAffinity(pid, coreMask, mode);
@@ -543,4 +619,13 @@ ipcMain.handle('get-profiles', () => {
 });
 
 ipcMain.on('window-minimize', () => mainWindow?.minimize());
+ipcMain.on('window-toggle-maximize', () => {
+  if (mainWindow) {
+    if (mainWindow.isMaximized()) {
+      mainWindow.unmaximize();
+    } else {
+      mainWindow.maximize();
+    }
+  }
+});
 ipcMain.on('window-close', () => mainWindow?.close());

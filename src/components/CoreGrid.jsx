@@ -54,7 +54,7 @@ export default function CoreGrid({
           )}
           <button onClick={onSelectAll} className="px-3 py-1.5 text-xs font-medium text-violet-600 bg-violet-50 hover:bg-violet-100 rounded-lg transition-colors">全选</button>
           <button onClick={onSelectPhysical} className="px-3 py-1.5 text-xs font-medium text-slate-500 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors">物理核</button>
-          <button onClick={onSelectSMT} className="px-3 py-1.5 text-xs font-medium text-slate-500 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors">超线程</button>
+          <button onClick={onSelectSMT} className="px-3 py-1.5 text-xs font-medium text-slate-500 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors">逻辑线程</button>
           <button onClick={onSelectNone} className="px-3 py-1.5 text-xs font-medium text-slate-400 hover:bg-slate-100 rounded-lg transition-colors">清空</button>
         </div>
       </div>
@@ -99,11 +99,11 @@ export default function CoreGrid({
         <div className="w-px h-3 bg-slate-200"></div>
         <div className="flex items-center gap-1.5">
           <div className="w-2 h-2 rounded bg-violet-500"></div>
-          <span>P = 物理核心</span>
+          <span>C = 物理核心</span>
         </div>
         <div className="flex items-center gap-1.5">
           <div className="w-2 h-2 rounded bg-pink-400"></div>
-          <span>E = 超线程</span>
+          <span>T = 逻辑线程</span>
         </div>
         {isDualCcd && (
           <>
@@ -139,13 +139,13 @@ export default function CoreGrid({
         key={coreIndex}
         onClick={() => onToggleCore(coreIndex)}
         className={`relative aspect-square rounded-xl flex flex-col items-center justify-center transition-all duration-200 ${isSelected
-            ? `${selectedBg} text-white shadow-glow scale-105`
-            : 'bg-slate-50 hover:bg-slate-100 text-slate-500 border border-slate-200'
+          ? `${selectedBg} text-white shadow-glow scale-105`
+          : 'bg-slate-50 hover:bg-slate-100 text-slate-500 border border-slate-200'
           }`}
       >
         <span className="text-sm font-bold">{coreIndex}</span>
         <span className={`text-[10px] mt-0.5 ${isSelected ? 'text-white/70' : 'text-slate-400'}`}>
-          {isPhysical ? 'P' : 'E'}
+          {isPhysical ? 'C' : 'T'}
         </span>
       </button>
     );

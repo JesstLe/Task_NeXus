@@ -1,8 +1,18 @@
-import React from 'react';
-import { Minus, X, Sparkles } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Minus, X, Sparkles, Square, Copy } from 'lucide-react';
 
 export default function Header({ cpuModel }) {
+  const [isMaximized, setIsMaximized] = useState(false);
+
+  useEffect(() => {
+    if (window.electron?.onMaximizedStateChange) {
+      // 监听窗口状态变化
+      window.electron.onMaximizedStateChange((state) => setIsMaximized(state));
+    }
+  }, []);
+
   const handleMinimize = () => window.electron?.minimize();
+  const handleToggleMaximize = () => window.electron?.toggleMaximize();
   const handleClose = () => window.electron?.close();
 
   return (
@@ -23,6 +33,12 @@ export default function Header({ cpuModel }) {
           className="w-8 h-8 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-all flex items-center justify-center"
         >
           <Minus size={14} />
+        </button>
+        <button
+          onClick={handleToggleMaximize}
+          className="w-8 h-8 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-all flex items-center justify-center"
+        >
+          {isMaximized ? <Copy size={12} /> : <Square size={12} />}
         </button>
         <button
           onClick={handleClose}
