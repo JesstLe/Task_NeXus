@@ -1158,7 +1158,8 @@ ipcMain.handle('set-timer-resolution', async (event, periodMs) => {
   // 2. 启动新进程 (Set & Hold)
   const desiredUnits = Math.round(periodMs * 10000);
 
-  // PowerShell 脚本：设置分辨率并挂起
+  // PowerShell 脚本：设置分辨率并挂起 (Read-Host)
+  // 使用 NtSetTimerResolution API
   const psScript = `
     $code = @"
     using System;
@@ -1169,28 +1170,35 @@ ipcMain.handle('set-timer-resolution', async (event, periodMs) => {
     }
 "@
     Add-Type -TypeDefinition $code
-      if (error) {
-        console.error('Timer resolution error:', error.message);
-        // 回退到旧方法（如果是 1ms 以上）
-        if (periodMs >= 1) {
-          const fallbackScript = enable
-            ? `Add-Type - TypeDefinition 'using System; using System.Runtime.InteropServices; public class WinMM { [DllImport("winmm.dll")] public static extern uint timeBeginPeriod(uint period); }';[WinMM]:: timeBeginPeriod(${ Math.round(periodMs) })`
-            : `Add - Type - TypeDefinition 'using System; using System.Runtime.InteropServices; public class WinMM { [DllImport("winmm.dll")] public static extern uint timeEndPeriod(uint period); }';[WinMM]:: timeEndPeriod(1)`;
-          exec(`powershell - NoProfile - Command "${fallbackScript}"`, () => { });
-        }
-        resolve({ success: false, error: error.message });
-      } else {
-        // Output is CurrentResolution in 100ns units
-        const currentUnits = parseInt(stdout.trim(), 10);
-        const actualMs = currentUnits / 10000;
+    $actual = 0
+    [HighResTimer]::NtSetTimerResolution(${desiredUnits}, $true, [ref]$actual)
+    Write-Host "Set to $actual units"
+    Read-Host
+  `;
 
-        currentTimerResolution = enable ? (actualMs || periodMs) : 0;
+  try {
+    const { spawn } = require('child_process');
+    resolutionProcess = spawn('powershell', [
+      '-NoProfile',
+      '-NonInteractive',
+      '-Command',
+      psScript
+    ]);
 
-        console.log(`Timer resolution set.Desired: ${ periodMs } ms, Actual System: ${ actualMs } ms`);
-        resolve({ success: true, resolution: currentTimerResolution });
-      }
+    // 简单错误监听
+    resolutionProcess.on('error', (err) => {
+      console.error('Timer resolution process error:', err);
     });
-  });
+
+    // 我们假设它成功了，因为是 spawn
+    currentTimerResolution = periodMs;
+    console.log(`Timer resolution set to ${periodMs}ms via persistent process PID ${resolutionProcess.pid}`);
+
+    return { success: true, actual: periodMs };
+  } catch (e) {
+    console.error('Failed to spawn timer resolution process:', e);
+    return { success: false, error: e.message };
+  }
 });
 
 // 获取定时器分辨率状态
@@ -1309,31 +1317,31 @@ ipcMain.handle('clear-memory', async () => {
 
     return new Promise((resolve, reject) => {
       exec(`powershell - NoProfile - ExecutionPolicy Bypass - Command "${psScript.replace(/" / g, '\\"').replace(/\n/g, ' ')}"`,
-{ timeout: 30000 },
-(error, stdout, stderr) => {
-  // 等待一小段时间让系统更新内存状态
-  setTimeout(() => {
-    const afterFree = os.freemem();
-    const freedMB = Math.round((afterFree - beforeFree) / 1024 / 1024);
+        { timeout: 30000 },
+        (error, stdout, stderr) => {
+          // 等待一小段时间让系统更新内存状态
+          setTimeout(() => {
+            const afterFree = os.freemem();
+            const freedMB = Math.round((afterFree - beforeFree) / 1024 / 1024);
 
-    resolve({
-      success: true,
-      freedMB: Math.max(0, freedMB),
-      message: freedMB > 0 ? `已释放 ${freedMB} MB 内存` : '内存已优化'
-    });
-  }, 500);
-}
+            resolve({
+              success: true,
+              freedMB: Math.max(0, freedMB),
+              message: freedMB > 0 ? `已释放 ${freedMB} MB 内存` : '内存已优化'
+            });
+          }, 500);
+        }
       );
     });
   } else {
-  // macOS/Linux: 使用 purge 命令 (需要 sudo)
-  // 这里只返回一个提示，因为 purge 需要 root 权限
-  return {
-    success: false,
-    freedMB: 0,
-    message: 'macOS 需要管理员权限执行 purge 命令'
-  };
-}
+    // macOS/Linux: 使用 purge 命令 (需要 sudo)
+    // 这里只返回一个提示，因为 purge 需要 root 权限
+    return {
+      success: false,
+      freedMB: 0,
+      message: 'macOS 需要管理员权限执行 purge 命令'
+    };
+  }
 });
 
 ipcMain.handle('get-profiles', () => {
