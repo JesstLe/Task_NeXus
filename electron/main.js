@@ -214,7 +214,7 @@ function setProcessPriority(pid, priority) {
       return resolve({ success: false, error: '无效的优先级' });
     }
 
-    const cmd = `powershell -Command "try { $p = Get-Process -Id ${safePid} -ErrorAction Stop; $p.PriorityClass = [System.Diagnostics.ProcessPriorityClass]::${priority}; } catch { exit 1 }"`;
+    const cmd = `powershell -NoProfile -ExecutionPolicy Bypass -Command "try { $p = Get-Process -Id ${safePid} -ErrorAction Stop; $p.PriorityClass = [System.Diagnostics.ProcessPriorityClass]::${priority}; } catch { exit 1 }"`;
 
     exec(cmd, (error) => {
       if (error) {
