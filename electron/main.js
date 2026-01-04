@@ -238,6 +238,7 @@ function verifyLicense(machineId, licenseKey) {
 
 let isMonitorRunning = false;
 let monitorTimer = null;
+let wmicFailed = false; // 缓存 wmic 失败状态，避免反复尝试
 
 function startProcessMonitor() {
   if (isMonitorRunning) return;
@@ -251,7 +252,7 @@ function startProcessMonitor() {
       console.error('Scan failed:', err);
     }
     if (isMonitorRunning) {
-      monitorTimer = setTimeout(loop, 5000);
+      monitorTimer = setTimeout(loop, 10000); // 10秒间隔，降低 CPU 占用
     }
   };
 
@@ -595,6 +596,36 @@ function applyAffinityAndPriority(pid, mask, mode, priority, primaryCore = null)
     .catch(err => writeLog('ERROR', `[Auto] Error for ${pid}: ${err.message}`, err));
 }
 
+// PowerShell 备选方案获取进程列表
+function getProcessesViaPS(options = {}) {
+  return new Promise((resolve, reject) => {
+    const psCmd = 'powershell -NoProfile -Command "Get-Process | Select-Object Id,ProcessName,CPU | ConvertTo-Csv -NoTypeInformation"';
+    exec(psCmd, { timeout: 15000 }, (err, stdout) => {
+      if (err) return reject(err);
+
+      const processes = [];
+      const lines = stdout.split('\n');
+
+      lines.forEach((line, idx) => {
+        if (idx === 0 || !line.trim()) return; // Skip header
+        const parts = line.split(',').map(p => p.replace(/"/g, '').trim());
+        if (parts.length >= 2) {
+          const pid = parseInt(parts[0], 10);
+          let name = parts[1];
+          const cpu = parseFloat(parts[2]) || 0;
+
+          if (!name || isNaN(pid) || pid <= 0) return;
+          if (!name.toLowerCase().endsWith('.exe')) name += '.exe';
+
+          processes.push({ pid, name, cpu: cpu / os.cpus().length, priority: 'Normal' });
+        }
+      });
+
+      resolve(processes);
+    });
+  });
+}
+
 // 复用获取进程列表的逻辑
 function getProcessesList(options = { includePriority: true }) {
   return new Promise((resolve, reject) => {
@@ -621,13 +652,19 @@ function getProcessesList(options = { includePriority: true }) {
       return;
     }
 
-    // Windows: 先尝试 wmic，失败则使用 PowerShell
+    // Windows: 如果 wmic 之前失败过，直接使用 PowerShell
+    if (wmicFailed) {
+      return getProcessesViaPS(options).then(resolve).catch(reject);
+    }
+
+    // 先尝试 wmic
     const wmicCmd = 'wmic path Win32_PerfFormattedData_PerfProc_Process get Name,IDProcess,PercentProcessorTime /FORMAT:CSV';
 
     exec(wmicCmd, { timeout: 10000 }, (error, stdout, stderr) => {
       // 如果 wmic 失败或结果为空，使用 PowerShell 备选方案
       if (error || !stdout || stdout.trim().split('\n').length < 3) {
-        writeLog('WARN', 'wmic failed, falling back to PowerShell');
+        wmicFailed = true; // 缓存失败状态
+        writeLog('WARN', 'wmic failed, switching to PowerShell permanently for this session');
 
         const psCmd = 'powershell -NoProfile -Command "Get-Process | Select-Object Id,ProcessName,CPU | ConvertTo-Csv -NoTypeInformation"';
         exec(psCmd, { timeout: 15000 }, (psErr, psOut) => {
