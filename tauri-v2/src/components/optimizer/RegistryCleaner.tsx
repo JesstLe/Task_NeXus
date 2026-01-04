@@ -1,91 +1,160 @@
-import React, { useState } from 'react';
-import { Trash2, Check, AlertTriangle, Search, RefreshCw } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Trash2, Check, AlertTriangle, Search, RefreshCw, Download, Upload, RotateCcw, Save } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
+import { open, save } from '@tauri-apps/plugin-dialog';
 
-interface RegistryItem {
-    id: string;
-    name: string;
-    category: string;
-    count: number;
+interface RegistryIssue {
+    path: string;
+    value_name: string | null;
+    issue_type: string;
+    details: string;
 }
 
-// Mock Data - In real implementation, this would come from Backend
-const REGISTRY_CATEGORIES: RegistryItem[] = [
-    { id: 'invalid_plugins', name: '无效的插件以及组件', category: '系统', count: 0 },
-    { id: 'deleted_file_paths', name: '已删除文件残留的无效路径', category: '系统', count: 0 },
-    { id: 'invalid_program_refs', name: '已注册程序残留的无效路径', category: '系统', count: 0 },
-    { id: 'file_extension_info', name: '无效的文件扩展名信息', category: '系统', count: 0 },
-    { id: 'help_docs', name: '无效的帮助文档', category: '系统', count: 0 },
-    { id: 'firewall_settings', name: '无效的Windows防火墙设置', category: '安全', count: 0 },
-    { id: 'font_info', name: '无效的字体信息', category: '系统', count: 0 },
-    { id: 'dynamic_links', name: '丢失的动态链接库', category: '系统', count: 0 },
-    { id: 'history_records', name: '用户操作历史记录', category: '隐私', count: 0 },
-    { id: 'invalid_uninstall', name: '无效的卸载信息', category: '软件', count: 0 },
-    { id: 'startup_items', name: '过期启动菜单项', category: '软件', count: 0 },
-    { id: 'startup_programs', name: '过期或无效的启动程序', category: '软件', count: 0 },
-    { id: 'sound_events', name: '过期或无效的声音或事件设置', category: '系统', count: 0 },
-];
+interface RegistryScanResult {
+    category: string;
+    count: number;
+    items: RegistryIssue[];
+}
 
 export function RegistryCleaner() {
-    const [items, setItems] = useState<RegistryItem[]>(REGISTRY_CATEGORIES);
-    const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set(items.map(i => i.id)));
+    const [scanResults, setScanResults] = useState<RegistryScanResult[]>([]);
+    const [selectedCategories, setSelectedCategories] = useState<Set<string>>(new Set());
     const [isScanning, setIsScanning] = useState(false);
     const [isCleaning, setIsCleaning] = useState(false);
+    const [isBackingUp, setIsBackingUp] = useState(false);
     const [lastScanTime, setLastScanTime] = useState<string | null>(null);
+    const [backups, setBackups] = useState<string[]>([]);
     const [status, setStatus] = useState<{ type: 'success' | 'error' | 'info', message: string } | null>(null);
 
-    const toggleItem = (id: string) => {
-        setSelectedIds(prev => {
+    // Load existing backups on mount
+    useEffect(() => {
+        loadBackups();
+    }, []);
+
+    const loadBackups = async () => {
+        try {
+            const list = await invoke<string[]>('list_registry_backups');
+            setBackups(list);
+        } catch (e) {
+            console.error('Failed to load backups:', e);
+        }
+    };
+
+    const toggleCategory = (category: string) => {
+        setSelectedCategories(prev => {
             const next = new Set(prev);
-            if (next.has(id)) next.delete(id);
-            else next.add(id);
+            if (next.has(category)) next.delete(category);
+            else next.add(category);
             return next;
         });
     };
 
-    const selectAll = () => setSelectedIds(new Set(items.map(i => i.id)));
-    const selectNone = () => setSelectedIds(new Set());
+    const selectAll = () => setSelectedCategories(new Set(scanResults.map(r => r.category)));
+    const selectNone = () => setSelectedCategories(new Set());
 
     const handleScan = async () => {
         setIsScanning(true);
         setStatus({ type: 'info', message: '正在扫描注册表...' });
 
-        // Simulate scan - replace with actual backend call when implemented
-        await new Promise(resolve => setTimeout(resolve, 1500));
+        try {
+            const results = await invoke<RegistryScanResult[]>('scan_registry');
+            setScanResults(results);
+            setSelectedCategories(new Set(results.map(r => r.category)));
+            setLastScanTime(new Date().toLocaleString());
 
-        // Generate random counts for demonstration
-        const scannedItems = items.map(item => ({
-            ...item,
-            count: Math.floor(Math.random() * 50)
-        }));
-
-        setItems(scannedItems);
-        setLastScanTime(new Date().toLocaleString());
-        setIsScanning(false);
-
-        const totalIssues = scannedItems.reduce((sum, i) => sum + i.count, 0);
-        setStatus({ type: 'success', message: `扫描完成，发现 ${totalIssues} 个问题` });
+            const totalIssues = results.reduce((sum, r) => sum + r.count, 0);
+            setStatus({ type: 'success', message: `扫描完成，发现 ${totalIssues} 个问题` });
+        } catch (e) {
+            setStatus({ type: 'error', message: `扫描失败: ${e}` });
+        } finally {
+            setIsScanning(false);
+        }
     };
 
     const handleClean = async () => {
+        // Gather all issues from selected categories
+        const issuesToClean: RegistryIssue[] = scanResults
+            .filter(r => selectedCategories.has(r.category))
+            .flatMap(r => r.items);
+
+        if (issuesToClean.length === 0) {
+            setStatus({ type: 'info', message: '没有需要清理的项目' });
+            return;
+        }
+
         setIsCleaning(true);
         setStatus({ type: 'info', message: '正在清理...' });
 
-        // Simulate clean - replace with actual backend call
-        await new Promise(resolve => setTimeout(resolve, 1000));
+        try {
+            const cleaned = await invoke<number>('clean_registry', { issues: issuesToClean });
 
-        // Reset counts for cleaned items
-        const cleanedItems = items.map(item => ({
-            ...item,
-            count: selectedIds.has(item.id) ? 0 : item.count
-        }));
+            // Refresh scan results
+            await handleScan();
 
-        setItems(cleanedItems);
-        setIsCleaning(false);
-        setStatus({ type: 'success', message: '清理完成！' });
+            setStatus({ type: 'success', message: `成功清理 ${cleaned} 个注册表项` });
+        } catch (e) {
+            setStatus({ type: 'error', message: `清理失败: ${e}` });
+        } finally {
+            setIsCleaning(false);
+        }
     };
 
-    const totalSelected = items.filter(i => selectedIds.has(i.id)).reduce((sum, i) => sum + i.count, 0);
+    const handleBackup = async () => {
+        setIsBackingUp(true);
+        setStatus({ type: 'info', message: '正在备份注册表...' });
+
+        try {
+            const filename = await invoke<string>('create_full_backup');
+            await loadBackups();
+            setStatus({ type: 'success', message: `备份成功: ${filename}` });
+        } catch (e) {
+            setStatus({ type: 'error', message: `备份失败: ${e}` });
+        } finally {
+            setIsBackingUp(false);
+        }
+    };
+
+    const handleExportBackup = async () => {
+        const path = await save({
+            filters: [{ name: 'Registry File', extensions: ['reg'] }],
+            defaultPath: `registry_backup_${Date.now()}.reg`
+        });
+
+        if (path) {
+            setStatus({ type: 'info', message: '正在导出...' });
+            try {
+                await invoke('backup_registry', {
+                    path,
+                    key: 'HKEY_CURRENT_USER\\Software'
+                });
+                setStatus({ type: 'success', message: '导出成功!' });
+            } catch (e) {
+                setStatus({ type: 'error', message: `导出失败: ${e}` });
+            }
+        }
+    };
+
+    const handleImportRestore = async () => {
+        const selected = await open({
+            filters: [{ name: 'Registry File', extensions: ['reg'] }],
+            multiple: false
+        });
+
+        if (selected) {
+            setStatus({ type: 'info', message: '正在导入注册表...' });
+            try {
+                await invoke('import_registry', { path: selected });
+                setStatus({ type: 'success', message: '注册表还原成功!' });
+            } catch (e) {
+                setStatus({ type: 'error', message: `导入失败: ${e}` });
+            }
+        }
+    };
+
+    const totalIssues = scanResults.reduce((sum, r) => sum + r.count, 0);
+    const selectedIssues = scanResults
+        .filter(r => selectedCategories.has(r.category))
+        .reduce((sum, r) => sum + r.count, 0);
 
     return (
         <div className="glass rounded-2xl p-6 shadow-soft flex flex-col">
@@ -116,6 +185,32 @@ export function RegistryCleaner() {
                 </button>
             </div>
 
+            {/* Backup/Restore Toolbar */}
+            <div className="flex gap-2 mb-4">
+                <button
+                    onClick={handleBackup}
+                    disabled={isBackingUp}
+                    className="flex-1 px-3 py-2 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 text-xs font-medium flex items-center justify-center gap-1.5 transition-colors"
+                >
+                    <Save size={12} />
+                    {isBackingUp ? '备份中...' : '备份注册表'}
+                </button>
+                <button
+                    onClick={handleExportBackup}
+                    className="flex-1 px-3 py-2 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 text-xs font-medium flex items-center justify-center gap-1.5 transition-colors"
+                >
+                    <Download size={12} />
+                    导出
+                </button>
+                <button
+                    onClick={handleImportRestore}
+                    className="flex-1 px-3 py-2 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 text-xs font-medium flex items-center justify-center gap-1.5 transition-colors"
+                >
+                    <Upload size={12} />
+                    导入/还原
+                </button>
+            </div>
+
             {/* Status */}
             {status && (
                 <div className={`mb-3 px-3 py-2 rounded-lg text-xs flex items-center gap-2 ${status.type === 'success' ? 'bg-green-50 text-green-600' :
@@ -129,34 +224,55 @@ export function RegistryCleaner() {
                 </div>
             )}
 
-            {/* Items Grid */}
-            <div className="flex-1 overflow-y-auto grid grid-cols-2 gap-2 max-h-[250px]">
-                {items.map(item => (
-                    <div
-                        key={item.id}
-                        onClick={() => toggleItem(item.id)}
-                        className={`p-3 rounded-lg border cursor-pointer flex items-center justify-between ${selectedIds.has(item.id)
-                                ? 'bg-orange-50/50 border-orange-200'
-                                : 'bg-white/50 border-slate-100'
-                            }`}
-                    >
-                        <div className="flex items-center gap-2">
-                            <div className={`w-4 h-4 rounded border flex items-center justify-center ${selectedIds.has(item.id) ? 'bg-orange-500 border-orange-500' : 'bg-white border-slate-300'
-                                }`}>
-                                {selectedIds.has(item.id) && <Check size={10} className="text-white" />}
+            {/* Scan Results */}
+            <div className="flex-1 overflow-y-auto space-y-2 max-h-[220px]">
+                {scanResults.length === 0 ? (
+                    <div className="text-center text-slate-400 py-8 text-sm">
+                        点击"开始扫描"检测注册表问题
+                    </div>
+                ) : (
+                    scanResults.map(result => (
+                        <div
+                            key={result.category}
+                            onClick={() => toggleCategory(result.category)}
+                            className={`p-3 rounded-lg border cursor-pointer flex items-center justify-between ${selectedCategories.has(result.category)
+                                    ? 'bg-orange-50/50 border-orange-200'
+                                    : 'bg-white/50 border-slate-100'
+                                }`}
+                        >
+                            <div className="flex items-center gap-2">
+                                <div className={`w-4 h-4 rounded border flex items-center justify-center ${selectedCategories.has(result.category) ? 'bg-orange-500 border-orange-500' : 'bg-white border-slate-300'
+                                    }`}>
+                                    {selectedCategories.has(result.category) && <Check size={10} className="text-white" />}
+                                </div>
+                                <span className={`text-sm font-medium ${selectedCategories.has(result.category) ? 'text-orange-700' : 'text-slate-600'}`}>
+                                    {result.category}
+                                </span>
                             </div>
-                            <span className={`text-xs font-medium ${selectedIds.has(item.id) ? 'text-orange-700' : 'text-slate-600'}`}>
-                                {item.name}
+                            <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${result.count > 0
+                                    ? 'text-orange-500 bg-orange-100'
+                                    : 'text-green-500 bg-green-100'
+                                }`}>
+                                {result.count}
                             </span>
                         </div>
-                        {item.count > 0 && (
-                            <span className="text-xs font-bold text-orange-500 bg-orange-100 px-2 py-0.5 rounded-full">
-                                {item.count}
-                            </span>
-                        )}
-                    </div>
-                ))}
+                    ))
+                )}
             </div>
+
+            {/* Recent Backups */}
+            {backups.length > 0 && (
+                <div className="mt-3 pt-3 border-t">
+                    <div className="text-xs text-slate-400 mb-1">最近备份:</div>
+                    <div className="flex flex-wrap gap-1">
+                        {backups.slice(0, 3).map(b => (
+                            <span key={b} className="text-xs bg-slate-100 px-2 py-0.5 rounded text-slate-500">
+                                {b}
+                            </span>
+                        ))}
+                    </div>
+                </div>
+            )}
 
             {/* Footer */}
             <div className="mt-4 pt-4 border-t flex items-center justify-between">
@@ -164,11 +280,13 @@ export function RegistryCleaner() {
                     <button onClick={selectAll} className="hover:text-blue-500 transition-colors">全选</button>
                     <span>·</span>
                     <button onClick={selectNone} className="hover:text-blue-500 transition-colors">全不选</button>
+                    <span className="ml-2 text-slate-300">|</span>
+                    <span className="ml-2">共 {totalIssues} 项</span>
                 </div>
                 <button
                     onClick={handleClean}
-                    disabled={isCleaning || totalSelected === 0}
-                    className={`px-5 py-2.5 rounded-xl font-medium text-sm flex items-center gap-2 transition-all ${isCleaning || totalSelected === 0
+                    disabled={isCleaning || selectedIssues === 0}
+                    className={`px-5 py-2.5 rounded-xl font-medium text-sm flex items-center gap-2 transition-all ${isCleaning || selectedIssues === 0
                             ? 'bg-slate-100 text-slate-400'
                             : 'bg-gradient-to-r from-orange-500 to-red-500 text-white shadow-lg hover:shadow-xl'
                         }`}
@@ -178,7 +296,7 @@ export function RegistryCleaner() {
                     ) : (
                         <Trash2 size={14} />
                     )}
-                    {isCleaning ? '清理中...' : `立即清理 (${totalSelected})`}
+                    {isCleaning ? '清理中...' : `立即清理 (${selectedIssues})`}
                 </button>
             </div>
         </div>

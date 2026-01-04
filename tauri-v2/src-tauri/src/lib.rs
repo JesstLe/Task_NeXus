@@ -12,6 +12,7 @@ pub mod thread;
 pub mod tweaks;
 pub mod watchdog;
 pub mod icons;
+pub mod registry;
 
 use serde::{Deserialize, Serialize};
 // use std::sync::atomic::{AtomicBool, Ordering};

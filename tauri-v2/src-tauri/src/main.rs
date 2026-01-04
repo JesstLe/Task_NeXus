@@ -463,15 +463,15 @@ pub fn run() {
                 hardware::start_cpu_monitor(app_handle).await;
             });
 
-            // 启动时最小化到托盘 (如果配置启用)
-            if let Ok(cfg) = config::get_config_sync() {
-                if cfg.start_minimized {
-                    if let Some(window) = app.get_webview_window("main") {
-                        let _ = window.hide();
-                        tracing::info!("Window hidden on startup (start_minimized enabled)");
-                    }
-                }
-            }
+            // 启动时最小化到托盘 (暂时禁用用于测试)
+            // if let Ok(cfg) = config::get_config_sync() {
+            //     if cfg.start_minimized {
+            //         if let Some(window) = app.get_webview_window("main") {
+            //             let _ = window.hide();
+            //             tracing::info!("Window hidden on startup (start_minimized enabled)");
+            //         }
+            //     }
+            // }
 
             Ok(())
         })
@@ -548,6 +548,14 @@ pub fn run() {
             activate_license,
             get_license_status,
             save_full_config,
+            // 注册表操作
+            task_nexus_lib::registry::backup_registry,
+            task_nexus_lib::registry::import_registry,
+            task_nexus_lib::registry::restore_registry,
+            task_nexus_lib::registry::scan_registry,
+            task_nexus_lib::registry::clean_registry,
+            task_nexus_lib::registry::list_registry_backups,
+            task_nexus_lib::registry::create_full_backup,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
