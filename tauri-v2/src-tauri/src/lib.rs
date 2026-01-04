@@ -6,6 +6,7 @@ pub mod config;
 pub mod power;
 pub mod tweaks;
 pub mod monitor;
+pub mod watchdog;
 
 use serde::{Deserialize, Serialize};
 
@@ -251,6 +252,29 @@ impl Default for SmartTrimConfig {
     }
 }
 
+/// ProBalance 智能抑制配置
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProBalanceConfig {
+    pub enabled: bool,
+    /// 触发抑制的总 CPU 阈值 (例如 50%)
+    pub cpu_threshold: f32,
+    /// 抑制后的优先级 (例如 "BelowNormal")
+    pub restrain_priority: String,
+    /// 排除列表 (进程名)
+    pub excluded_processes: Vec<String>,
+}
+
+impl Default for ProBalanceConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            cpu_threshold: 50.0,
+            restrain_priority: "BelowNormal".to_string(),
+            excluded_processes: vec!["task-nexus.exe".to_string(), "explorer.exe".to_string()],
+        }
+    }
+}
+
 /// 应用配置
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
@@ -275,6 +299,8 @@ pub struct AppConfig {
     pub exclude_list: Vec<String>,
     /// 智能内存优化
     pub smart_trim: SmartTrimConfig,
+    /// ProBalance 配置
+    pub pro_balance: ProBalanceConfig,
     /// 后台限制列表
     pub throttle_list: Vec<String>,
 }
@@ -321,6 +347,7 @@ impl Default for AppConfig {
                 "explorer.exe".to_string(),
             ],
             smart_trim: SmartTrimConfig::default(),
+            pro_balance: ProBalanceConfig::default(),
             throttle_list: Vec::new(),
         }
     }

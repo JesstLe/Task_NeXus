@@ -413,7 +413,7 @@ fn trim_memory_sync(pid: u32) -> Result<u64, ()> {
 
 /// 获取前台窗口的进程 ID
 #[cfg(windows)]
-fn get_foreground_window_pid() -> Option<u32> {
+pub fn get_foreground_window_pid() -> Option<u32> {
     use windows::Win32::UI::WindowsAndMessaging::*;
     
     unsafe {

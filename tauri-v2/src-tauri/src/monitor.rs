@@ -84,9 +84,10 @@ impl ProcessMonitor {
                 }
 
                 // Sorting (optional here, but backend sorting saves frontend work? 
-                // Requirement says "Click header to sort", so frontend sorting is likely expected.
-                // We'll send unsorted or default sorted by CPU)
                 processes.sort_by(|a, b| b.cpu_usage.partial_cmp(&a.cpu_usage).unwrap_or(std::cmp::Ordering::Equal));
+
+                // ProBalance Watchdog Check
+                tauri::async_runtime::block_on(crate::watchdog::check_and_restrain(&processes));
 
                 // Emit event
                 if let Err(e) = app_handle.emit("process-update", &processes) {
