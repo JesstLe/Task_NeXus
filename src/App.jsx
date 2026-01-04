@@ -94,7 +94,9 @@ function App() {
     try {
       if (window.electron) {
         const list = await window.electron.getProcesses();
-        setProcesses(Array.isArray(list) ? list : []);
+        // Sort by CPU usage descending (highest first)
+        const sorted = Array.isArray(list) ? list.sort((a, b) => (b.cpu || 0) - (a.cpu || 0)) : [];
+        setProcesses(sorted);
       } else {
         await new Promise(r => setTimeout(r, 500));
         setProcesses([
