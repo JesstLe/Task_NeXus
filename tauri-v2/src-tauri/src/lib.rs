@@ -15,7 +15,11 @@ pub mod icons;
 pub mod registry;
 
 use serde::{Deserialize, Serialize};
-// use std::sync::atomic::{AtomicBool, Ordering};
+
+/// 默认返回 true 的函数，供 serde 使用
+fn default_true() -> bool {
+    true
+}
 
 /// 解码系统命令输出 (GBK -> UTF-8)
 pub fn decode_output(bytes: &[u8]) -> String {
@@ -211,6 +215,7 @@ pub struct CoreLoad {
 
 /// 进程策略
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ProcessProfile {
     /// 进程名称 (如 cs2.exe)
     pub name: String,
@@ -221,8 +226,10 @@ pub struct ProcessProfile {
     /// 优先级
     pub priority: String,
     /// 优先核心 (可选)
+    #[serde(alias = "primary_core")]
     pub primary_core: Option<u32>,
     /// 是否启用
+    #[serde(default = "default_true")]
     pub enabled: bool,
     /// 创建时间戳
     pub timestamp: u64,
@@ -230,16 +237,21 @@ pub struct ProcessProfile {
 
 /// 默认规则配置
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DefaultRules {
     /// 是否启用
     pub enabled: bool,
     /// 游戏进程掩码
+    #[serde(alias = "game_mask")]
     pub game_mask: Option<String>,
     /// 系统进程掩码
+    #[serde(alias = "system_mask")]
     pub system_mask: Option<String>,
     /// 游戏优先级
+    #[serde(alias = "game_priority")]
     pub game_priority: String,
     /// 系统优先级
+    #[serde(alias = "system_priority")]
     pub system_priority: String,
 }
 
@@ -257,6 +269,7 @@ impl Default for DefaultRules {
 
 /// 智能内存优化配置
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SmartTrimConfig {
     pub enabled: bool,
     pub threshold: u32,
@@ -277,13 +290,17 @@ impl Default for SmartTrimConfig {
 
 /// ProBalance 智能抑制配置
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ProBalanceConfig {
     pub enabled: bool,
     /// 触发抑制的总 CPU 阈值 (例如 50%)
+    #[serde(alias = "cpu_threshold")]
     pub cpu_threshold: f32,
     /// 抑制后的优先级 (例如 "BelowNormal")
+    #[serde(alias = "restrain_priority")]
     pub restrain_priority: String,
     /// 排除列表 (进程名)
+    #[serde(alias = "excluded_processes")]
     pub excluded_processes: Vec<String>,
 }
 
@@ -300,6 +317,7 @@ impl Default for ProBalanceConfig {
 
 /// 应用配置
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AppConfig {
     /// 窗口尺寸
     pub width: u32,
@@ -307,12 +325,16 @@ pub struct AppConfig {
     pub x: Option<i32>,
     pub y: Option<i32>,
     /// 开机自启动
+    #[serde(alias = "launch_on_startup")]
     pub launch_on_startup: bool,
     /// 关闭时最小化到托盘
+    #[serde(alias = "close_to_tray")]
     pub close_to_tray: bool,
     /// 启动时最小化窗口
+    #[serde(alias = "start_minimized")]
     pub start_minimized: bool,
     /// CPU 亲和性模式
+    #[serde(alias = "cpu_affinity_mode")]
     pub cpu_affinity_mode: String,
     /// 调度模式 (前端用)
     #[serde(default)]
@@ -331,7 +353,7 @@ pub struct AppConfig {
     pub pro_balance: ProBalanceConfig,
     /// 后台限制列表
     pub throttle_list: Vec<String>,
-    /// 激活授权
+    /// 授权许可
     pub license: Option<String>,
 }
 

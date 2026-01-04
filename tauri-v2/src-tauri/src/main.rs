@@ -7,7 +7,11 @@
 use task_nexus_lib::{
     config, governor, hardware, hardware_topology, power, thread, tweaks, AppError,
 };
-use tauri::Manager;
+use tauri::{
+    menu::{Menu, MenuItem},
+    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
+    Manager,
+};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[cfg(windows)]
@@ -463,15 +467,52 @@ pub fn run() {
                 hardware::start_cpu_monitor(app_handle).await;
             });
 
-            // 启动时最小化到托盘 (暂时禁用用于测试)
-            // if let Ok(cfg) = config::get_config_sync() {
-            //     if cfg.start_minimized {
-            //         if let Some(window) = app.get_webview_window("main") {
-            //             let _ = window.hide();
-            //             tracing::info!("Window hidden on startup (start_minimized enabled)");
-            //         }
-            //     }
-            // }
+            // 启动时最小化到托盘
+            if let Ok(cfg) = config::get_config_sync() {
+                if cfg.start_minimized {
+                    if let Some(window) = app.get_webview_window("main") {
+                        let _ = window.hide();
+                        tracing::info!("Window hidden on startup (start_minimized enabled)");
+                    }
+                }
+            }
+
+            // 设置托盘菜单
+            let show_i = MenuItem::with_id(app, "show", "显示主界面", true, None::<&str>)?;
+            let quit_i = MenuItem::with_id(app, "quit", "彻底退出", true, None::<&str>)?;
+            let menu = Menu::with_items(app, &[&show_i, &quit_i])?;
+
+            let _tray = TrayIconBuilder::new()
+                .icon(app.default_window_icon().unwrap().clone())
+                .menu(&menu)
+                .show_menu_on_left_click(false)
+                .on_menu_event(|app, event| match event.id.as_ref() {
+                    "show" => {
+                        if let Some(window) = app.get_webview_window("main") {
+                            let _ = window.show();
+                            let _ = window.set_focus();
+                        }
+                    }
+                    "quit" => {
+                        app.exit(0);
+                    }
+                    _ => {}
+                })
+                .on_tray_icon_event(|tray, event| {
+                    if let TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        button_state: MouseButtonState::Up,
+                        ..
+                    } = event
+                    {
+                        let app = tray.app_handle();
+                        if let Some(window) = app.get_webview_window("main") {
+                            let _ = window.show();
+                            let _ = window.set_focus();
+                        }
+                    }
+                })
+                .build(app)?;
 
             Ok(())
         })
@@ -487,10 +528,8 @@ pub fn run() {
                 if should_minimize {
                     // 阻止默认关闭
                     api.prevent_close();
-                    // 最小化窗口
-                    let _ = window.minimize();
-                    // 可选：隐藏窗口 (视需求而定，通常最小化即可，或者 hide 到托盘)
-                    // let _ = window.hide(); 
+                    // 隐藏窗口到托盘
+                    let _ = window.hide();
                 }
             }
         })
