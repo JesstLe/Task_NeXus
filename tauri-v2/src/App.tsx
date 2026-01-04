@@ -101,7 +101,7 @@ function App() {
 
         try {
             const list = await invoke<ProcessInfo[]>('get_processes');
-            const sorted = Array.isArray(list) ? list.sort((a, b) => (b.cpu || 0) - (a.cpu || 0)) : [];
+            const sorted = Array.isArray(list) ? list.sort((a, b) => (b.cpu_usage || 0) - (a.cpu_usage || 0)) : [];
             setProcesses(sorted);
         } catch (e) {
             console.error('扫描失败:', e);

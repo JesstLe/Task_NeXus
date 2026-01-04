@@ -10,13 +10,23 @@ export interface CpuArch {
     eCores?: number;
 }
 
+export interface TopologyCore {
+    id: number;
+    core_type: string;
+    cpus: number[];
+}
+
 export interface ProcessInfo {
     pid: number;
     name: string;
-    cpu?: number;
-    memory?: number;
-    path?: string;
+    user?: string;
     priority?: string;
+    cpu_usage?: number;
+    memory_usage?: number;
+    cpu_affinity?: string;
+    path?: string;
+    parent_pid?: number;
+    icon_base64?: string;
 }
 
 export interface ProcessProfile {

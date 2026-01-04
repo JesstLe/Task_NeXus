@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Cpu, Zap, Layers, Hash, X } from 'lucide-react';
+import { TopologyCore } from '../types';
 
 const CoreTypeColors: Record<string, string> = {
     'Performance': 'border-blue-500 bg-blue-50 text-blue-700',
@@ -15,11 +16,6 @@ const CoreTypeLabels: Record<string, string> = {
     'Unknown': 'Standard Core'
 };
 
-export interface TopologyCore {
-    id: number;
-    core_type: string;
-    physical_id: number;
-}
 
 interface SmartAffinitySelectorProps {
     topology: TopologyCore[];
