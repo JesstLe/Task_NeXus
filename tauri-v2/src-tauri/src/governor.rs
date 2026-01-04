@@ -28,11 +28,11 @@ static LAST_CPU_TIMES: Lazy<RwLock<HashMap<u32, (u64, u64)>>> =
 /// 这是一个权衡：sysinfo 内部也使用高效的系统调用，但 API 更安全
 #[cfg(windows)]
 pub async fn get_process_snapshot() -> AppResult<Vec<ProcessInfo>> {
-    use sysinfo::{ProcessesToUpdate, System};
+    use sysinfo::{ProcessesToUpdate, System, Users};
     
     tokio::task::spawn_blocking(|| {
         let mut sys = System::new();
-        // 刷新进程列表 (sysinfo 0.31 removes bool arg)
+        let users = Users::new_with_refreshed_list(); // Load users
         sys.refresh_processes(ProcessesToUpdate::All);
         
         let mut processes = Vec::new();
@@ -42,32 +42,46 @@ pub async fn get_process_snapshot() -> AppResult<Vec<ProcessInfo>> {
             let pid_u32 = pid.as_u32();
             let name = process.name().to_string_lossy().to_string();
             
-            // 计算 CPU 使用率
+            // CPU & Memory
             let cpu_usage = process.cpu_usage();
-            
-            // 获取内存使用
             let memory = process.memory();
             
-            // 获取优先级和亲和性
-            let (priority, affinity) = get_process_details(pid_u32).unwrap_or(("Normal".to_string(), 0));
+            // Priority & Affinity (WinAPI)
+            let (priority, affinity_mask) = get_process_details(pid_u32).unwrap_or(("Normal".to_string(), 0));
+            // Convert affinity mask to string
+            let cpu_affinity = if affinity_mask == 0 { "All".to_string() } else { format!("{:#x}", affinity_mask) };
             
-            // 记录 CPU 时间用于下次计算
+            // User Name
+            let user = match process.user_id() {
+                Some(uid) => users.get_user_by_id(uid).map(|u| u.name().to_string()).unwrap_or_else(|| "Unknown".to_string()),
+                None => "System".to_string(),
+            };
+            
+            // Path
+            let path = process.exe().map(|p| p.to_string_lossy().to_string()).unwrap_or_default();
+
+            // Thread Count (Placeholder as sysinfo/WinAPI simple call missing in this legacy func)
+            let thread_count = 0; 
+            
+            // Record CPU time for incremental calc (legacy)
             new_cpu_times.insert(pid_u32, (process.run_time(), 0));
             
             processes.push(ProcessInfo {
                 pid: pid_u32,
                 name,
                 cpu_usage,
-                memory,
+                memory_usage: memory, // map memory -> memory_usage
                 priority,
-                affinity,
+                cpu_affinity, // map affinity -> cpu_affinity
+                thread_count,
+                user,
+                path,
             });
         }
         
-        // 更新 CPU 时间缓存
         *LAST_CPU_TIMES.write() = new_cpu_times;
         
-        // 按 CPU 使用率降序排序
+        // Sort by CPU desc
         processes.sort_by(|a, b| b.cpu_usage.partial_cmp(&a.cpu_usage).unwrap_or(std::cmp::Ordering::Equal));
         
         Ok(processes)

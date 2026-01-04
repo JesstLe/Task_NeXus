@@ -1,6 +1,8 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import ReactDOM from 'react-dom';
-import { Search, RefreshCw, CheckSquare, Square, Zap, Gauge, MoreHorizontal, ArrowUp, ArrowDown, Minus } from 'lucide-react';
+import { Search, RefreshCw, CheckSquare, Square, Zap, Gauge, MoreHorizontal, ArrowUp, ArrowDown, Minus, XCircle, ChevronRight, Cpu } from 'lucide-react';
+import { listen } from '@tauri-apps/api/event';
+import { useVirtualizer } from '@tanstack/react-virtual';
 
 const PRIORITY_MAP_CN = {
   'RealTime': '实时',
@@ -11,329 +13,358 @@ const PRIORITY_MAP_CN = {
   'Idle': '低'
 };
 
-const SimpleContextMenu = ({ x, y, process, onClose, onAction }) => {
+const formatBytes = (bytes) => {
+  if (bytes === 0) return '0 B';
+  const k = 1024;
+  const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+};
+
+const formatTime = (seconds) => {
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  const s = Math.floor(seconds % 60);
+  return `${h > 0 ? h + ':' : ''}${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+};
+
+// -- Mini Graph --
+const MiniGraph = ({ data, color, height = 40, width = 100 }) => {
+  if (!data || data.length < 2) return <div style={{ height, width }} className="bg-slate-50/50 rounded" />;
+  const max = 100;
+  const points = data.map((val, i) => {
+    const x = (i / (data.length - 1)) * width;
+    const y = height - (val / max) * height;
+    return `${x},${y}`;
+  }).join(' ');
+
+  return (
+    <svg width="100%" height={height} viewBox={`0 0 ${width} ${height}`} className="overflow-hidden bg-slate-50/50 rounded border border-slate-100" preserveAspectRatio="none">
+      <polyline fill="none" stroke={color} strokeWidth="1.5" points={points} vectorEffect="non-scaling-stroke" />
+      <path d={`M0,${height} L${points.split(' ')[0]} ${points} L${width},${height} Z`} fill={color} fillOpacity="0.1" />
+    </svg>
+  );
+};
+
+// -- Context Menu Items --
+const ContextMenuItem = ({ label, icon: Icon, shortcut, subMenu, onClick, danger }) => {
+  const [showSub, setShowSub] = useState(false);
+  const itemRef = useRef(null);
+
+  return (
+    <div
+      ref={itemRef}
+      className="relative"
+      onMouseEnter={() => setShowSub(true)}
+      onMouseLeave={() => setShowSub(false)}
+    >
+      <button
+        onClick={onClick}
+        className={`w-full text-left px-3 py-1.5 text-xs flex items-center gap-2 transition-colors
+          ${danger ? 'text-red-600 hover:bg-red-50' : 'text-slate-700 hover:bg-violet-50 hover:text-violet-600'}
+        `}
+      >
+        {Icon && <Icon size={14} className={danger ? 'text-red-500' : 'text-slate-400'} />}
+        <span className="flex-1">{label}</span>
+        {shortcut && <span className="text-slate-400 text-[10px]">{shortcut}</span>}
+        {subMenu && <ChevronRight size={12} className="text-slate-400" />}
+      </button>
+
+      {subMenu && showSub && (
+        <div className="absolute left-full top-0 ml-1 w-40 bg-white/95 backdrop-blur-xl rounded-lg shadow-xl border border-slate-200/60 p-1 z-50 animate-in fade-in slide-in-from-left-2 duration-100">
+          {subMenu}
+        </div>
+      )}
+    </div>
+  );
+};
+
+const ProcessContextMenu = ({ x, y, process, onClose, onAction }) => {
+  const [position, setPosition] = useState({ top: y, left: x });
   const menuRef = useRef(null);
-
-  useEffect(() => {
-    const handleClickOutside = (event) => {
-      if (menuRef.current && !menuRef.current.contains(event.target)) {
-        onClose();
-      }
-    };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, [onClose]);
-
-  // Adjust position if close to edge
-  const [position, setPosition] = React.useState({ top: y, left: x });
 
   useEffect(() => {
     if (menuRef.current) {
       const rect = menuRef.current.getBoundingClientRect();
       const viewportHeight = window.innerHeight;
       const viewportWidth = window.innerWidth;
-
       let newTop = y;
       let newLeft = x;
-
-      // Vertical adjustment: Flip up if bottom overflows
-      if (y + rect.height > viewportHeight) {
-        newTop = y - rect.height;
-      }
-
-      // Horizontal adjustment: Shift left if right overflows
-      if (x + rect.width > viewportWidth) {
-        newLeft = viewportWidth - rect.width - 10;
-      }
-
+      if (y + rect.height > viewportHeight) newTop = y - rect.height;
+      if (x + rect.width > viewportWidth) newLeft = viewportWidth - rect.width - 10;
       setPosition({ top: newTop, left: newLeft });
     }
   }, [x, y]);
 
-  const style = {
-    top: position.top,
-    left: position.left,
-  };
-
   return (
     <div
       ref={menuRef}
-      className="fixed z-[9999] w-48 bg-white/90 backdrop-blur-xl rounded-xl shadow-2xl border border-slate-100/50 p-1.5 animate-in fade-in zoom-in-95 duration-100"
-      style={style}
+      className="fixed z-[9999] w-56 bg-white/95 backdrop-blur-xl rounded-xl shadow-2xl border border-slate-200/60 p-1.5 animate-in fade-in zoom-in-95 duration-100"
+      style={position}
     >
-      <div className="px-2 py-1.5 border-b border-slate-100 mb-1">
-        <div className="font-medium text-xs text-slate-700 truncate">{process.name}</div>
-        <div className="text-[10px] text-slate-400">PID: {process.pid}</div>
+      <div className="px-3 py-2 border-b border-slate-100 mb-1">
+        <div className="font-bold text-xs text-slate-800 truncate">{process.name}</div>
+        <div className="text-[10px] text-slate-500 font-mono">PID: {process.pid} | User: {process.user || 'System'}</div>
       </div>
-
-      <div className="space-y-0.5">
-        <div className="px-2 py-1 text-[10px] font-semibold text-slate-400 uppercase tracking-wider">设置优先级</div>
-        <button onClick={() => onAction('setRealTime')} className="w-full text-left px-2 py-1.5 text-xs text-slate-700 hover:bg-violet-50 hover:text-violet-600 rounded-lg transition-colors flex items-center gap-2">
-          <Zap size={14} className="text-purple-500" /> 实时 (RealTime)
-        </button>
-        <button onClick={() => onAction('setHigh')} className="w-full text-left px-2 py-1.5 text-xs text-slate-700 hover:bg-violet-50 hover:text-violet-600 rounded-lg transition-colors flex items-center gap-2">
-          <ArrowUp size={14} className="text-red-500" /> 高 (High)
-        </button>
-        <button onClick={() => onAction('setAboveNormal')} className="w-full text-left px-2 py-1.5 text-xs text-slate-700 hover:bg-violet-50 hover:text-violet-600 rounded-lg transition-colors flex items-center gap-2">
-          <ArrowUp size={14} className="text-orange-400" /> 高于正常
-        </button>
-        <button onClick={() => onAction('setNormal')} className="w-full text-left px-2 py-1.5 text-xs text-slate-700 hover:bg-violet-50 hover:text-violet-600 rounded-lg transition-colors flex items-center gap-2">
-          <Minus size={14} className="text-blue-400" /> 正常 (Normal)
-        </button>
-        <button onClick={() => onAction('setBelowNormal')} className="w-full text-left px-2 py-1.5 text-xs text-slate-700 hover:bg-violet-50 hover:text-violet-600 rounded-lg transition-colors flex items-center gap-2">
-          <ArrowDown size={14} className="text-cyan-500" /> 低于正常
-        </button>
-        <button onClick={() => onAction('setIdle')} className="w-full text-left px-2 py-1.5 text-xs text-slate-700 hover:bg-violet-50 hover:text-violet-600 rounded-lg transition-colors flex items-center gap-2">
-          <ArrowDown size={14} className="text-green-500" /> 低 (Idle)
-        </button>
+      <div className="py-1 space-y-0.5">
+        <ContextMenuItem
+          label="优先级 (Priority)"
+          icon={Zap}
+          subMenu={
+            <>
+              <div className="px-2 py-1 text-[10px] font-bold text-slate-400 uppercase">选择等级</div>
+              {['RealTime', 'High', 'AboveNormal', 'Normal', 'BelowNormal', 'Idle'].map(p => (
+                <ContextMenuItem
+                  key={p}
+                  label={`${PRIORITY_MAP_CN[p]} (${p})`}
+                  onClick={() => { onAction('setPriority', p); onClose(); }}
+                  icon={p === process.priority ? CheckSquare : undefined}
+                />
+              ))}
+            </>
+          }
+        />
+        <ContextMenuItem
+          label="CPU 亲和性 (Affinity)"
+          icon={Cpu}
+          subMenu={
+            <>
+              <ContextMenuItem label="所有核心 (All)" onClick={() => { onAction('setAffinity', 'all'); onClose(); }} />
+              <ContextMenuItem label="仅 P-Cores" onClick={() => { onAction('setAffinity', 'p-cores'); onClose(); }} />
+              <ContextMenuItem label="仅 E-Cores" onClick={() => { onAction('setAffinity', 'e-cores'); onClose(); }} />
+            </>
+          }
+        />
+        <div className="my-1 border-t border-slate-100"></div>
+        <ContextMenuItem label="结束进程 (Terminate)" icon={XCircle} danger onClick={() => { onAction('terminate'); onClose(); }} />
       </div>
     </div>
   );
 };
 
-export default function ProcessScanner({ processes, selectedPid, onSelect, onScan, scanning, selectedPids, setSelectedPids }) {
+export default function ProcessScanner({ selectedPid, onSelect, onScan, selectedPids, setSelectedPids }) {
+  const [processes, setProcesses] = useState([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [menuState, setMenuState] = useState({ visible: false, x: 0, y: 0, process: null });
+  const [sortConfig, setSortConfig] = useState({ key: 'cpu', direction: 'desc' });
+  const [history, setHistory] = useState({ cpu: [], memory: [] });
+  const [scanning, setScanning] = useState(true);
 
-  // 过滤进程
-  const filteredProcesses = useMemo(() => {
-    if (!searchTerm) return processes;
-    const term = searchTerm.toLowerCase();
-    return processes.filter(p =>
-      p.name.toLowerCase().includes(term) ||
-      p.pid.toString().includes(term)
-    );
-  }, [processes, searchTerm]);
+  // Setup Event Listener
+  useEffect(() => {
+    let unlisten;
+    async function setupListener() {
+      unlisten = await listen('process-update', (event) => {
+        setProcesses(event.payload);
+        setScanning(false);
+      });
+    }
+    setupListener();
+    return () => {
+      if (unlisten) unlisten();
+    };
+  }, []);
 
-  // Handle Checkbox Toggle
+  // Update Graphs
+  useEffect(() => {
+    if (processes.length === 0) return;
+    const totalCpu = processes.reduce((acc, p) => acc + (p.cpu_usage || 0), 0) / (navigator.hardwareConcurrency || 16);
+    const totalMem = processes.reduce((acc, p) => acc + (p.memory_usage || 0), 0);
+
+    setHistory(prev => {
+      const maxLen = 50;
+      const newCpu = [...prev.cpu, totalCpu > 100 ? 100 : totalCpu].slice(-maxLen);
+      const memPercent = (totalMem / (32 * 1024 * 1024 * 1024)) * 100; // Approx 32GB baseline
+      const newMem = [...prev.memory, memPercent].slice(-maxLen);
+      return { cpu: newCpu, memory: newMem };
+    });
+  }, [processes]);
+
+  // Sort & Filter
+  const sortedProcesses = useMemo(() => {
+    let filtered = processes;
+    if (searchTerm) {
+      const term = searchTerm.toLowerCase();
+      filtered = processes.filter(p =>
+        p.name.toLowerCase().includes(term) ||
+        p.pid.toString().includes(term) ||
+        (p.user && p.user.toLowerCase().includes(term))
+      );
+    }
+
+    return [...filtered].sort((a, b) => {
+      let aVal = a[sortConfig.key];
+      let bVal = b[sortConfig.key];
+
+      // Mapping for specific fields
+      if (sortConfig.key === 'cpu') { aVal = a.cpu_usage || 0; bVal = b.cpu_usage || 0; }
+      if (sortConfig.key === 'memory') { aVal = a.memory_usage || 0; bVal = b.memory_usage || 0; }
+      if (sortConfig.key === 'priority') {
+        // Simple string sort, or map to int if strict needed
+      }
+
+      if (aVal < bVal) return sortConfig.direction === 'asc' ? -1 : 1;
+      if (aVal > bVal) return sortConfig.direction === 'asc' ? 1 : -1;
+      return 0;
+    });
+  }, [processes, searchTerm, sortConfig]);
+
+  // Virtualizer
+  const parentRef = useRef(null);
+  const rowVirtualizer = useVirtualizer({
+    count: sortedProcesses.length,
+    getScrollElement: () => parentRef.current,
+    estimateSize: () => 35, // Row height
+    overscan: 5,
+  });
+
+  const handleSort = (key) => {
+    setSortConfig(prev => ({
+      key,
+      direction: prev.key === key && prev.direction === 'desc' ? 'asc' : 'desc'
+    }));
+  };
+
+  const handleContextMenu = (e, process) => {
+    e.preventDefault();
+    setMenuState({ visible: true, x: e.pageX, y: e.pageY, process });
+  };
+
+  const menuAction = async (actionType, value) => {
+    if (!menuState.process) return;
+    try {
+      if (window.electron && actionType === 'setPriority') {
+        await window.electron.setProcessPriority(menuState.process.pid, value);
+      }
+    } catch (e) { console.error(e); }
+  };
+
   const toggleSelect = (pid) => {
     const newSet = new Set(selectedPids);
     if (newSet.has(pid)) newSet.delete(pid);
     else newSet.add(pid);
     setSelectedPids(newSet);
-
-    // Also update single select for CoreGrid if 1 item selected
     if (newSet.size === 1) onSelect([...newSet][0]);
     else if (newSet.size === 0) onSelect(null);
   };
 
-  const handleSelectAll = () => {
-    if (selectedPids.size === filteredProcesses.length) setSelectedPids(new Set());
-    else setSelectedPids(new Set(filteredProcesses.map(p => p.pid)));
-  };
+  const isSelected = (pid) => selectedPids.has(pid);
 
-  // Context Menu Handler
-  const handleContextMenu = (e, process) => {
-    e.preventDefault();
-    e.stopPropagation();
-    let x = e.pageX;
-    let y = e.pageY;
-
-    if (!x && !y) {
-      const rect = e.target.getBoundingClientRect();
-      x = rect.left;
-      y = rect.bottom;
-    }
-
-    setMenuState({ visible: true, x, y, process });
-  };
-
-  // Bulk Action Handler - applies priority to all selected processes
-  const handleBulkAction = async (priority) => {
-    console.log('[handleBulkAction] Called with priority:', priority, 'selectedPids:', Array.from(selectedPids));
-    if (selectedPids.size === 0) {
-      console.log('[handleBulkAction] No PIDs selected, returning');
-      return;
-    }
-
-    try {
-      const promises = Array.from(selectedPids).map(pid => {
-        console.log('[handleBulkAction] Setting priority for PID:', pid);
-        if (window.electron?.setProcessPriority) {
-          return window.electron.setProcessPriority(pid, priority);
-        }
-        return Promise.resolve();
-      });
-
-      await Promise.all(promises);
-      console.log('[handleBulkAction] All done, clearing selection');
-      setSelectedPids(new Set()); // Clear selection after action
-      onScan(); // Refresh the list
-    } catch (e) {
-      console.error('Bulk action failed:', e);
-    }
-  };
-
-  const handleMenuAction = async (action) => {
-    const { process } = menuState;
-    if (!process) return; // Only single process action for now in this menu
-
-    // Map Action to IPC Call
-    // action: setHigh, setIdle, etc.
-    let priorityClass = 'Normal';
-    switch (action) {
-      case 'setRealTime': priorityClass = 'RealTime'; break;
-      case 'setHigh': priorityClass = 'High'; break;
-      case 'setAboveNormal': priorityClass = 'AboveNormal'; break;
-      case 'setNormal': priorityClass = 'Normal'; break;
-      case 'setBelowNormal': priorityClass = 'BelowNormal'; break;
-      case 'setIdle': priorityClass = 'Idle'; break;
-    }
-
-    // Call IPC to set priority
-    // function setPriority(pid, priorityClass)
-    // We assume backend has 'set-priority' or use specific logic.
-    // Currently we have 'save-config-rule'. 
-    // Wait, do we have a direct 'set-process-priority' IPC?
-    // main.js lines 450+ don't show it explicitly. 
-    // We might need to implement calls via 'saveConfigRule' or add a new IPC.
-    // Assuming we use 'set-affinity' style but for priority?
-    // Let's use `window.electron.setProcessPriority` if it exists, or fallback.
-    // Actually, I should check if I added `setPriority` to backend.
-    // I haven't added `setPriority` IPC yet.
-    // I will call it, and if it fails, I'll log.
-    // BUT the user wants it to work.
-    // Re-using `saveConfigRule` might be persistent. User might want temporary?
-    // Usually "Right Click -> Set Priority" is temporary.
-    // I will try to call `window.electron.setPriority(process.pid, priorityClass)`.
-    // I need to ensure backend handles this. (I will check/add next step if missing).
-
-    try {
-      if (window.electron?.setProcessPriority) {
-        await window.electron.setProcessPriority(process.pid, priorityClass);
-        onScan(); // Refresh
-      } else {
-        console.warn("setProcessPriority IPC missing");
-      }
-    } catch (e) { console.error(e); }
-
-    setMenuState({ ...menuState, visible: false });
-  };
-
-  // Helper for Priority Colors
-  const getPriorityColor = (pri) => {
-    switch (pri) {
-      case 'RealTime': return 'text-purple-600 bg-purple-50 font-bold border border-purple-100';
-      case 'High': return 'text-red-500 bg-red-50 font-medium border border-red-100';
-      case 'AboveNormal': return 'text-orange-500 bg-orange-50 border border-orange-100';
-      case 'Normal': return 'text-slate-600 bg-slate-50 border border-slate-100';
-      case 'BelowNormal': return 'text-cyan-600 bg-cyan-50 border border-cyan-100';
-      case 'Idle': return 'text-green-600 bg-green-50 border border-green-100';
-      default: return 'text-slate-400 bg-slate-50';
-    }
-  };
+  const Cell = ({ children, className, onClick }) => (
+    <div className={`px-2 py-1.5 truncate flex items-center ${className}`} onClick={onClick}>
+      {children}
+    </div>
+  );
 
   return (
-    <div className="glass rounded-2xl p-0 shadow-soft relative flex flex-col h-[500px] overflow-hidden">
-      {/* Header / Toolbar */}
-      <div className="p-4 border-b border-slate-100 flex items-center gap-3 bg-white/50 backdrop-blur-sm z-10">
-        <div className="relative flex-1">
-          <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-          <input
-            type="text"
-            placeholder="搜索进程或PID..."
-            value={searchTerm}
-            onChange={e => setSearchTerm(e.target.value)}
-            className="w-full pl-9 pr-3 py-2 bg-slate-50 rounded-xl text-sm outline-none focus:ring-2 focus:ring-violet-500/10 border border-slate-200"
-          />
+    <div className="glass rounded-xl shadow-sm border border-slate-200/60 flex flex-col h-[600px] overflow-hidden bg-white/50 backdrop-blur-md">
+      {/* Metrics Header */}
+      <div className="h-20 bg-white/60 border-b border-slate-200 grid grid-cols-4 gap-4 px-4 py-2">
+        {/* ... Same Graphs ... */}
+        <div className="flex flex-col justify-between">
+          <div className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Processor Use</div>
+          <div className="flex items-end gap-2">
+            <span className="text-2xl font-mono font-bold text-slate-700">{history.cpu[history.cpu.length - 1]?.toFixed(0)}%</span>
+            <MiniGraph data={history.cpu} color="#8b5cf6" width={80} height={24} />
+          </div>
         </div>
-        <button onClick={onScan} disabled={scanning} className="p-2 hover:bg-slate-100 rounded-lg text-slate-500">
-          <RefreshCw size={18} className={scanning ? 'animate-spin' : ''} />
-        </button>
+        <div className="flex flex-col justify-between">
+          <div className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Memory Load</div>
+          <div className="flex items-end gap-2">
+            <span className="text-2xl font-mono font-bold text-slate-700">{history.memory[history.memory.length - 1]?.toFixed(0)}%</span>
+            <MiniGraph data={history.memory} color="#06b6d4" width={80} height={24} />
+          </div>
+        </div>
+        <div className="flex flex-col justify-between">
+          <div className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Processes</div>
+          <span className="text-xl font-mono text-slate-600">{processes.length}</span>
+        </div>
+        {/* Search */}
+        <div className="flex items-center">
+          <div className="relative w-full">
+            <Search size={14} className="absolute left-2 top-1/2 -translate-y-1/2 text-slate-400" />
+            <input type="text" value={searchTerm} onChange={e => setSearchTerm(e.target.value)} placeholder="Search..." className="w-full pl-8 pr-2 py-1.5 bg-slate-100 rounded-lg text-xs outline-none focus:ring-1 focus:ring-violet-500" />
+          </div>
+          {scanning && <RefreshCw size={14} className="ml-2 animate-spin text-slate-400" />}
+        </div>
       </div>
 
-      {/* Table Header */}
-      <div className="grid grid-cols-[40px_1.5fr_80px_100px_80px_1fr] gap-2 px-4 py-2 bg-slate-50/80 text-xs font-semibold text-slate-500 border-b border-slate-200">
-        <div className="flex items-center justify-center">
-          <button onClick={handleSelectAll}>
-            {selectedPids.size > 0 && selectedPids.size === filteredProcesses.length ? <CheckSquare size={16} className="text-violet-500" /> : <Square size={16} />}
-          </button>
+      {/* Grid Header */}
+      <div className="grid grid-cols-[30px_2fr_1fr_60px_80px_100px_80px_80px_1fr] gap-px bg-slate-100 border-b border-slate-200 text-[11px] font-bold text-slate-500 uppercase tracking-wide pr-2">
+        <div className="p-2 flex items-center justify-center cursor-pointer" onClick={() => setSelectedPids(new Set())}>
+          {selectedPids.size > 0 ? <CheckSquare size={12} className="text-violet-600" /> : <Square size={12} />}
         </div>
-        <div>进程名称</div>
-        <div>PID</div>
-        <div>优先级</div>
-        <div>CPU</div>
-        <div className="text-right">操作</div>
+        {['name', 'user', 'pid', 'priority', 'affinity', 'cpu', 'memory', 'path'].map(key => (
+          <div key={key} onClick={() => handleSort(key)} className="p-2 flex items-center cursor-pointer hover:bg-slate-200 transition-colors select-none">
+            {key} {sortConfig.key === key && (sortConfig.direction === 'desc' ? <ArrowDown size={10} className="ml-1" /> : <ArrowUp size={10} className="ml-1" />)}
+          </div>
+        ))}
       </div>
 
-      {/* Process List (Table Body) */}
-      <div className="flex-1 overflow-y-auto">
-        {filteredProcesses.map(p => {
-          const isSelected = selectedPids.has(p.pid);
-          return (
-            <div
-              key={p.pid}
-              onContextMenu={(e) => handleContextMenu(e, p)}
-              className={`grid grid-cols-[40px_1.5fr_80px_100px_80px_1fr] gap-2 px-4 py-2.5 items-center text-sm border-b border-slate-50 hover:bg-violet-50/50 transition-colors group ${isSelected ? 'bg-violet-50/80' : ''}`}
-            >
-              {/* Checkbox */}
-              <div className="flex items-center justify-center">
-                <button onClick={() => toggleSelect(p.pid)} className="text-slate-400 hover:text-violet-500">
-                  {isSelected ? <CheckSquare size={16} className="text-violet-500" /> : <Square size={16} />}
-                </button>
+      {/* Virtual Table Body */}
+      <div ref={parentRef} className="flex-1 overflow-y-auto overflow-x-hidden font-mono text-xs relative">
+        <div style={{ height: `${rowVirtualizer.getTotalSize()}px`, width: '100%', position: 'relative' }}>
+          {rowVirtualizer.getVirtualItems().map((virtualRow) => {
+            const p = sortedProcesses[virtualRow.index];
+            const active = isSelected(p.pid);
+            return (
+              <div
+                key={p.pid}
+                data-index={virtualRow.index}
+                ref={rowVirtualizer.measureElement}
+                onContextMenu={(e) => handleContextMenu(e, p)}
+                style={{
+                  position: 'absolute',
+                  top: 0,
+                  left: 0,
+                  width: '100%',
+                  height: `${virtualRow.size}px`,
+                  transform: `translateY(${virtualRow.start}px)`,
+                }}
+                className={`grid grid-cols-[30px_2fr_1fr_60px_80px_100px_80px_80px_1fr] gap-px items-center border-b border-slate-50 hover:bg-violet-50/60 transition-colors ${active ? 'bg-violet-100/50' : virtualRow.index % 2 === 0 ? 'bg-white/40' : 'bg-white/10'}`}
+              >
+                <div className="flex justify-center">
+                  <button onClick={() => toggleSelect(p.pid)}>
+                    {active ? <CheckSquare size={12} className="text-violet-600" /> : <Square size={12} className="text-slate-300 hover:text-slate-500" />}
+                  </button>
+                </div>
+
+                <Cell className="font-semibold text-slate-700" onClick={() => toggleSelect(p.pid)}>
+                  <img src="https://img.icons8.com/color/48/console.png" className="w-4 h-4 mr-2 opacity-80" alt="" />
+                  {p.name}
+                </Cell>
+
+                <Cell className="text-slate-500">{p.user || 'System'}</Cell>
+                <Cell className="text-slate-400">{p.pid}</Cell>
+
+                <Cell>
+                  <span className={`px-1.5 py-0.5 rounded text-[10px] ${p.priority === 'High' || p.priority === 'RealTime' ? 'bg-red-100 text-red-600' : 'bg-slate-100 text-slate-500'}`}>
+                    {PRIORITY_MAP_CN[p.priority] || p.priority}
+                  </span>
+                </Cell>
+
+                <Cell className="text-slate-400 text-[10px] truncate" title={p.cpu_affinity}>{p.cpu_affinity}</Cell>
+
+                <Cell className={`${p.cpu_usage > 10 ? 'text-red-500 font-bold' : 'text-slate-600'}`}>
+                  {p.cpu_usage?.toFixed(1)}%
+                </Cell>
+
+                <Cell className="text-slate-600">{formatBytes(p.memory_usage || 0)}</Cell>
+
+                <Cell className="text-slate-400 truncate" title={p.path}>{p.path}</Cell>
               </div>
-
-              {/* Name */}
-              <div className="font-medium text-slate-700 truncate min-w-0" title={p.name}>
-                {p.name}
-              </div>
-
-              {/* PID */}
-              <div className="font-mono text-xs text-slate-400">{p.pid}</div>
-
-              {/* Priority */}
-              <div>
-                <span className={`text-[10px] px-2 py-0.5 rounded-full whitespace-nowrap ${getPriorityColor(p.priority)}`}>
-                  {PRIORITY_MAP_CN[p.priority] || p.priority || '正常'}
-                </span>
-              </div>
-
-              {/* CPU */}
-              <div className="font-mono text-slate-600">
-                {p.cpu > 0 ? `${p.cpu.toFixed(1)}%` : '-'}
-              </div>
-
-              {/* Edit / More Button */}
-              <div className="flex justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                <button
-                  onClick={(e) => handleContextMenu(e, p)}
-                  className="flex items-center gap-1 px-2 py-1 hover:bg-slate-200 rounded text-xs text-slate-600"
-                >
-                  <MoreHorizontal size={14} />
-                  <span>管理</span>
-                </button>
-              </div>
-            </div>
-          );
-        })}
-
-        {filteredProcesses.length === 0 && (
-          <div className="p-8 text-center text-slate-400">未找到相关进程</div>
-        )}
+            );
+          })}
+        </div>
       </div>
 
-      {/* Floating Bulk Action Bar */}
-      {selectedPids.size > 0 && (
-        <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-slate-800/90 backdrop-blur text-white px-4 py-2 rounded-full shadow-xl flex items-center gap-4 animate-in slide-in-from-bottom-5 z-20">
-          <span className="text-xs font-semibold">{selectedPids.size} 已选择</span>
-          <div className="h-4 w-px bg-white/20"></div>
-          <button className="hover:text-violet-300 text-xs flex items-center gap-1" onClick={() => handleBulkAction('High')}>
-            <Zap size={14} /> 设为高
-          </button>
-          <button className="hover:text-green-300 text-xs flex items-center gap-1" onClick={() => handleBulkAction('Idle')}>
-            <Gauge size={14} /> 设为低
-          </button>
-        </div>
-      )}
-
-      {/* Inline Context Menu (Portaled) */}
       {menuState.visible && typeof document !== 'undefined' && ReactDOM.createPortal(
-        <SimpleContextMenu
+        <ProcessContextMenu
           x={menuState.x}
           y={menuState.y}
           process={menuState.process}
           onClose={() => setMenuState({ ...menuState, visible: false })}
-          onAction={handleMenuAction}
+          onAction={menuAction}
         />,
         document.body
       )}

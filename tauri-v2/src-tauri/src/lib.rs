@@ -5,6 +5,7 @@ pub mod hardware;
 pub mod config;
 pub mod power;
 pub mod tweaks;
+pub mod monitor;
 
 use serde::{Deserialize, Serialize};
 
@@ -28,11 +29,17 @@ pub struct ProcessInfo {
     /// CPU 使用率 (0.0 - 100.0)
     pub cpu_usage: f32,
     /// 内存使用量 (bytes)
-    pub memory: u64,
+    pub memory_usage: u64,
     /// 优先级 (Idle, BelowNormal, Normal, AboveNormal, High, RealTime)
     pub priority: String,
-    /// CPU 亲和性掩码
-    pub affinity: u64,
+    /// CPU 亲和性掩码 (formatted string)
+    pub cpu_affinity: String,
+    /// 线程数
+    pub thread_count: u32,
+    /// 用户名
+    pub user: String,
+    /// 执行路径
+    pub path: String,
 }
 
 /// 优先级级别

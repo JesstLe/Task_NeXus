@@ -216,15 +216,21 @@ pub fn run() {
         .init();
     
     tracing::info!("Task Nexus starting...");
+
+    let monitor = std::sync::Arc::new(task_nexus_lib::monitor::ProcessMonitor::new());
+    let monitor_clone = monitor.clone();
     
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
-        .setup(|app| {
+        .setup(move |app| {
             // 初始化配置
             let app_handle = app.handle();
             if let Err(e) = config::init_config(app_handle) {
                 tracing::error!("Failed to init config: {}", e);
             }
+
+            // Start Monitor
+            monitor_clone.start(app.handle().clone());
             
             Ok(())
         })

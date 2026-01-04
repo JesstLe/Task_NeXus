@@ -12,6 +12,7 @@
         "tauri:build": "tauri build"
     },
     "dependencies": {
+        "@tanstack/react-virtual": "^3.13.16",
         "@tauri-apps/api": "^2",
         "clsx": "^2.1.0",
         "lucide-react": "^0.344.0",
