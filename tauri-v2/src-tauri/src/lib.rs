@@ -19,8 +19,22 @@ use serde::{Deserialize, Serialize};
 
 /// 解码系统命令输出 (GBK -> UTF-8)
 pub fn decode_output(bytes: &[u8]) -> String {
-    let (cow, _, _) = encoding_rs::GBK.decode(bytes);
-    cow.to_string()
+    if bytes.is_empty() {
+        return String::new();
+    }
+    
+    // Try UTF-8 first
+    if let Ok(s) = std::str::from_utf8(bytes) {
+        return s.trim().to_string();
+    }
+
+    // Fallback to GBK
+    let (cow, _, malformed) = encoding_rs::GBK.decode(bytes);
+    if malformed {
+        // If still malformed, try to salvage what we can with Lossy
+        return String::from_utf8_lossy(bytes).trim().to_string();
+    }
+    cow.trim().to_string()
 }
 
 // ============================================================================

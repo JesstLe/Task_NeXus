@@ -115,23 +115,56 @@ pub async fn apply_tweaks(tweak_ids: &[String]) -> AppResult<serde_json::Value> 
             if let Some(tweak) = all_tweaks.get(id.as_str()) {
                 tracing::info!("Applying tweak: {} ({})", tweak.name, tweak.command);
 
-                // 使用 cmd /c 执行命令 (隱藏窗口)
-                let output = Command::new("cmd")
-                    .args(["/c", &tweak.command])
-                    .creation_flags(CREATE_NO_WINDOW)
-                    .output();
+                // Split commands by '&' (handle both '&' and '&&')
+                let normalized_cmd = tweak.command.replace("&&", "&");
+                let sub_commands: Vec<&str> = normalized_cmd.split('&').map(|s| s.trim()).collect();
+                let mut tweak_failed = false;
+                let mut sub_errors = Vec::new();
 
-                match output {
-                    Ok(out) if out.status.success() => {
-                        success_count += 1;
+                for cmd_str in sub_commands {
+                    if cmd_str.is_empty() { continue; }
+
+                    // Parse command and arguments manually to avoid cmd /c issues
+                    let parts: Vec<String> = shell_words::split(cmd_str).unwrap_or_else(|_| vec![cmd_str.to_string()]);
+                    if parts.is_empty() { continue; }
+
+                    let mut cmd = Command::new(&parts[0]);
+                    if parts.len() > 1 {
+                        cmd.args(&parts[1..]);
                     }
-                    Ok(out) => {
-                        let stderr = crate::decode_output(&out.stderr);
-                        errors.push(format!("{}: {}", tweak.name, stderr.trim()));
+                    cmd.creation_flags(CREATE_NO_WINDOW);
+                    
+                    let output = cmd.output();
+
+                    match output {
+                        Ok(out) if out.status.success() => {
+                            // Success
+                        }
+                        Ok(out) => {
+                            let stderr = crate::decode_output(&out.stderr);
+                            let stdout = crate::decode_output(&out.stdout);
+                            let error_msg = if !stderr.trim().is_empty() { stderr.trim() } else { stdout.trim() };
+                            
+                            // Special case: ignore missing values in delete operations
+                            if (cmd_str.contains("bcdedit") || cmd_str.contains("reg delete")) && 
+                               (error_msg.contains("找不到") || error_msg.contains("not found") || error_msg.is_empty()) {
+                                tracing::info!("Ignored expected error for {}: {}", parts[0], error_msg);
+                            } else {
+                                tweak_failed = true;
+                                sub_errors.push(error_msg.to_string());
+                            }
+                        }
+                        Err(e) => {
+                            tweak_failed = true;
+                            sub_errors.push(e.to_string());
+                        }
                     }
-                    Err(e) => {
-                        errors.push(format!("{}: {}", tweak.name, e));
-                    }
+                }
+
+                if !tweak_failed {
+                    success_count += 1;
+                } else {
+                    errors.push(format!("{}: {}", tweak.name, sub_errors.join(" | ")));
                 }
             }
         }
@@ -259,16 +292,17 @@ fn get_tweaks_map() -> std::collections::HashMap<&'static str, TweakInfo> {
         category: "Input".to_string(),
         name: "键盘优化".to_string(),
         desc: "".to_string(),
-        command: r#"reg add "HKCU\Control Panel\Keyboard" /v KeyboardDelay /t REG_SZ /d "0" /f && reg add "HKCU\Control Panel\Keyboard" /v KeyboardSpeed /t REG_SZ /d "31" /f"#.to_string(),
+        command: r#"reg add "HKCU\Control Panel\Keyboard" /v KeyboardDelay /t REG_SZ /d 0 /f & reg add "HKCU\Control Panel\Keyboard" /v KeyboardSpeed /t REG_SZ /d 31 /f"#.to_string(),
         safe: true,
     });
+
 
     map.insert("disable_mouse_accel", TweakInfo {
         id: "disable_mouse_accel".to_string(),
         category: "Input".to_string(),
         name: "禁用鼠标加速".to_string(),
         desc: "".to_string(),
-        command: r#"reg add "HKCU\Control Panel\Mouse" /v MouseSpeed /t REG_SZ /d "0" /f && reg add "HKCU\Control Panel\Mouse" /v MouseThreshold1 /t REG_SZ /d "0" /f && reg add "HKCU\Control Panel\Mouse" /v MouseThreshold2 /t REG_SZ /d "0" /f"#.to_string(),
+        command: r#"reg add "HKCU\Control Panel\Mouse" /v MouseSpeed /t REG_SZ /d 0 /f & reg add "HKCU\Control Panel\Mouse" /v MouseThreshold1 /t REG_SZ /d 0 /f & reg add "HKCU\Control Panel\Mouse" /v MouseThreshold2 /t REG_SZ /d 0 /f"#.to_string(),
         safe: true,
     });
 
@@ -277,7 +311,7 @@ fn get_tweaks_map() -> std::collections::HashMap<&'static str, TweakInfo> {
         category: "Network".to_string(),
         name: "TCP NoDelay".to_string(),
         desc: "".to_string(),
-        command: "netsh int tcp set global nagle=disabled && netsh int tcp set global autotuninglevel=normal".to_string(),
+        command: "netsh int tcp set global nagle=disabled & netsh int tcp set global autotuninglevel=normal".to_string(),
         safe: true,
     });
 
@@ -286,7 +320,7 @@ fn get_tweaks_map() -> std::collections::HashMap<&'static str, TweakInfo> {
         category: "Network".to_string(),
         name: "网络限流".to_string(),
         desc: "".to_string(),
-        command: r#"reg add "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile" /v NetworkThrottlingIndex /t REG_DWORD /d 0xffffffff /f"#.to_string(),
+        command: r#"reg add "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile" /v NetworkThrottlingIndex /t REG_DWORD /d 4294967295 /f"#.to_string(),
         safe: true,
     });
 
@@ -295,7 +329,7 @@ fn get_tweaks_map() -> std::collections::HashMap<&'static str, TweakInfo> {
         category: "System".to_string(),
         name: "禁用 Game Bar".to_string(),
         desc: "".to_string(),
-        command: r#"reg add "HKCU\System\GameConfigStore" /v GameDVR_Enabled /t REG_DWORD /d 0 /f && reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\GameDVR" /v AllowGameDVR /t REG_DWORD /d 0 /f"#.to_string(),
+        command: r#"reg add "HKCU\System\GameConfigStore" /v GameDVR_Enabled /t REG_DWORD /d 0 /f & reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\GameDVR" /v AllowGameDVR /t REG_DWORD /d 0 /f"#.to_string(),
         safe: true,
     });
 

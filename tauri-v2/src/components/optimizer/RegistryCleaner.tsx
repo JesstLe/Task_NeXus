@@ -1,35 +1,28 @@
 import React, { useState, useEffect } from 'react';
-import { Trash2, Check, AlertTriangle, Search, RefreshCw, Download, Upload, RotateCcw, Save } from 'lucide-react';
+import { Shield, AlertTriangle, Save, Trash2, Check, RefreshCw } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
-import { open, save } from '@tauri-apps/plugin-dialog';
-
-interface RegistryIssue {
-    path: string;
-    value_name: string | null;
-    issue_type: string;
-    details: string;
-}
-
-interface RegistryScanResult {
-    category: string;
-    count: number;
-    items: RegistryIssue[];
-}
+import { ask } from '@tauri-apps/plugin-dialog';
 
 export function RegistryCleaner() {
-    const [scanResults, setScanResults] = useState<RegistryScanResult[]>([]);
-    const [selectedCategories, setSelectedCategories] = useState<Set<string>>(new Set());
-    const [isScanning, setIsScanning] = useState(false);
-    const [isCleaning, setIsCleaning] = useState(false);
     const [isBackingUp, setIsBackingUp] = useState(false);
-    const [lastScanTime, setLastScanTime] = useState<string | null>(null);
     const [backups, setBackups] = useState<string[]>([]);
+    const [isAdmin, setIsAdmin] = useState(false);
     const [status, setStatus] = useState<{ type: 'success' | 'error' | 'info', message: string } | null>(null);
 
-    // Load existing backups on mount
+    // Load existing backups and check admin on mount
     useEffect(() => {
         loadBackups();
+        checkAdminStatus();
     }, []);
+
+    const checkAdminStatus = async () => {
+        try {
+            const result = await invoke<boolean>('check_admin');
+            setIsAdmin(result);
+        } catch (e) {
+            console.error('Failed to check admin status:', e);
+        }
+    };
 
     const loadBackups = async () => {
         try {
@@ -40,73 +33,14 @@ export function RegistryCleaner() {
         }
     };
 
-    const toggleCategory = (category: string) => {
-        setSelectedCategories(prev => {
-            const next = new Set(prev);
-            if (next.has(category)) next.delete(category);
-            else next.add(category);
-            return next;
-        });
-    };
-
-    const selectAll = () => setSelectedCategories(new Set(scanResults.map(r => r.category)));
-    const selectNone = () => setSelectedCategories(new Set());
-
-    const handleScan = async () => {
-        setIsScanning(true);
-        setStatus({ type: 'info', message: '正在扫描注册表...' });
-
-        try {
-            const results = await invoke<RegistryScanResult[]>('scan_registry');
-            setScanResults(results);
-            setSelectedCategories(new Set(results.map(r => r.category)));
-            setLastScanTime(new Date().toLocaleString());
-
-            const totalIssues = results.reduce((sum, r) => sum + r.count, 0);
-            setStatus({ type: 'success', message: `扫描完成，发现 ${totalIssues} 个问题` });
-        } catch (e) {
-            setStatus({ type: 'error', message: `扫描失败: ${e}` });
-        } finally {
-            setIsScanning(false);
-        }
-    };
-
-    const handleClean = async () => {
-        // Gather all issues from selected categories
-        const issuesToClean: RegistryIssue[] = scanResults
-            .filter(r => selectedCategories.has(r.category))
-            .flatMap(r => r.items);
-
-        if (issuesToClean.length === 0) {
-            setStatus({ type: 'info', message: '没有需要清理的项目' });
-            return;
-        }
-
-        setIsCleaning(true);
-        setStatus({ type: 'info', message: '正在清理...' });
-
-        try {
-            const cleaned = await invoke<number>('clean_registry', { issues: issuesToClean });
-
-            // Refresh scan results
-            await handleScan();
-
-            setStatus({ type: 'success', message: `成功清理 ${cleaned} 个注册表项` });
-        } catch (e) {
-            setStatus({ type: 'error', message: `清理失败: ${e}` });
-        } finally {
-            setIsCleaning(false);
-        }
-    };
-
     const handleBackup = async () => {
         setIsBackingUp(true);
         setStatus({ type: 'info', message: '正在备份注册表...' });
 
         try {
-            const filename = await invoke<string>('create_full_backup');
-            await loadBackups();
-            setStatus({ type: 'success', message: `备份成功: ${filename}` });
+            await invoke('create_full_backup');
+            setStatus({ type: 'success', message: '注册表备份成功!' });
+            loadBackups();
         } catch (e) {
             setStatus({ type: 'error', message: `备份失败: ${e}` });
         } finally {
@@ -114,190 +48,135 @@ export function RegistryCleaner() {
         }
     };
 
-    const handleExportBackup = async () => {
-        const path = await save({
-            filters: [{ name: 'Registry File', extensions: ['reg'] }],
-            defaultPath: `registry_backup_${Date.now()}.reg`
+    const handleDeleteBackup = async (event: React.MouseEvent, name: string) => {
+        event.stopPropagation();
+
+        const confirmed = await ask(`确定要永久删除备份文件 "${name}" 吗？`, {
+            title: '删除确认',
+            kind: 'error',
+            okLabel: '确定删除',
+            cancelLabel: '取消'
         });
 
-        if (path) {
-            setStatus({ type: 'info', message: '正在导出...' });
-            try {
-                await invoke('backup_registry', {
-                    path,
-                    key: 'HKEY_CURRENT_USER\\Software'
-                });
-                setStatus({ type: 'success', message: '导出成功!' });
-            } catch (e) {
-                setStatus({ type: 'error', message: `导出失败: ${e}` });
-            }
+        if (!confirmed) {
+            return;
+        }
+
+        try {
+            await invoke('delete_backup_by_name', { name });
+            setStatus({ type: 'success', message: '备份文件已成功删除' });
+            loadBackups();
+        } catch (e) {
+            setStatus({ type: 'error', message: `删除失败: ${e}` });
         }
     };
-
-    const handleImportRestore = async () => {
-        const selected = await open({
-            filters: [{ name: 'Registry File', extensions: ['reg'] }],
-            multiple: false
-        });
-
-        if (selected) {
-            setStatus({ type: 'info', message: '正在导入注册表...' });
-            try {
-                await invoke('import_registry', { path: selected });
-                setStatus({ type: 'success', message: '注册表还原成功!' });
-            } catch (e) {
-                setStatus({ type: 'error', message: `导入失败: ${e}` });
-            }
-        }
-    };
-
-    const totalIssues = scanResults.reduce((sum, r) => sum + r.count, 0);
-    const selectedIssues = scanResults
-        .filter(r => selectedCategories.has(r.category))
-        .reduce((sum, r) => sum + r.count, 0);
 
     return (
-        <div className="glass rounded-2xl p-6 shadow-soft flex flex-col">
+        <div className="glass rounded-2xl p-6 shadow-soft flex flex-col h-full">
             {/* Header */}
-            <div className="flex items-center justify-between mb-4">
-                <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-orange-500 to-red-500 flex items-center justify-center">
-                        <Trash2 size={20} className="text-white" />
+            <div className="flex items-center justify-between mb-6">
+                <div className="flex items-center gap-4">
+                    <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-orange-400 to-orange-600 flex items-center justify-center shadow-lg shadow-orange-200">
+                        <Save size={20} className="text-white" />
                     </div>
                     <div>
-                        <h3 className="font-semibold text-slate-700">注册表清理</h3>
+                        <div className="flex items-center gap-2">
+                            <h3 className="font-semibold text-slate-700">注册表备份管理</h3>
+                            {isAdmin ? (
+                                <span className="flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-green-50 text-[10px] font-bold text-green-600 border border-green-100 uppercase tracking-tighter">
+                                    <Shield size={10} />
+                                    管理员模式
+                                </span>
+                            ) : (
+                                <span className="flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-red-50 text-[10px] font-bold text-red-600 border border-red-100 uppercase tracking-tighter">
+                                    <AlertTriangle size={10} />
+                                    非管理员
+                                </span>
+                            )}
+                        </div>
                         <p className="text-xs text-slate-400">
-                            {lastScanTime ? `上次扫描: ${lastScanTime}` : '扫描并清理无效注册表项'}
+                            Windows 注册表备份管理
                         </p>
                     </div>
                 </div>
-                <button
-                    onClick={handleScan}
-                    disabled={isScanning}
-                    className="px-4 py-2 rounded-xl bg-gradient-to-r from-green-500 to-emerald-500 text-white font-medium text-sm flex items-center gap-2 hover:shadow-lg transition-all disabled:opacity-50"
-                >
-                    {isScanning ? (
-                        <RefreshCw size={14} className="animate-spin" />
-                    ) : (
-                        <Search size={14} />
-                    )}
-                    {isScanning ? '扫描中...' : '开始扫描'}
-                </button>
             </div>
 
-            {/* Backup/Restore Toolbar */}
-            <div className="flex gap-2 mb-4">
+            {/* Actions */}
+            <div className="flex gap-4 mb-6">
                 <button
                     onClick={handleBackup}
                     disabled={isBackingUp}
-                    className="flex-1 px-3 py-2 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 text-xs font-medium flex items-center justify-center gap-1.5 transition-colors"
+                    className="flex-1 px-3 py-3 rounded-xl border border-slate-200 text-slate-600 hover:bg-slate-50 hover:border-orange-200 transition-all flex flex-col items-center gap-2 group"
                 >
-                    <Save size={12} />
-                    {isBackingUp ? '备份中...' : '备份注册表'}
-                </button>
-                <button
-                    onClick={handleExportBackup}
-                    className="flex-1 px-3 py-2 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 text-xs font-medium flex items-center justify-center gap-1.5 transition-colors"
-                >
-                    <Download size={12} />
-                    导出
-                </button>
-                <button
-                    onClick={handleImportRestore}
-                    className="flex-1 px-3 py-2 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 text-xs font-medium flex items-center justify-center gap-1.5 transition-colors"
-                >
-                    <Upload size={12} />
-                    导入/还原
+                    <div className="w-8 h-8 rounded-lg bg-orange-50 text-orange-500 flex items-center justify-center group-hover:bg-orange-500 group-hover:text-white transition-colors">
+                        <Save size={16} />
+                    </div>
+                    <span className="text-xs font-semibold">{isBackingUp ? '正在备份...' : '备份注册表'}</span>
                 </button>
             </div>
 
             {/* Status */}
             {status && (
-                <div className={`mb-3 px-3 py-2 rounded-lg text-xs flex items-center gap-2 ${status.type === 'success' ? 'bg-green-50 text-green-600' :
-                        status.type === 'error' ? 'bg-red-50 text-red-600' :
-                            'bg-blue-50 text-blue-600'
+                <div className={`mb-6 px-4 py-3 rounded-xl text-xs flex items-center gap-2 animate-in fade-in slide-in-from-top-2 duration-300 ${status.type === 'success' ? 'bg-green-50 text-green-600 border border-green-100' :
+                    status.type === 'error' ? 'bg-red-50 text-red-600 border border-red-100' :
+                        'bg-blue-50 text-blue-600 border border-blue-100'
                     }`}>
                     {status.type === 'success' ? <Check size={14} /> :
                         status.type === 'info' ? <RefreshCw size={14} className="animate-spin" /> :
                             <AlertTriangle size={14} />}
-                    {status.message}
+                    <span className="font-medium">{status.message}</span>
                 </div>
             )}
-
-            {/* Scan Results */}
-            <div className="flex-1 overflow-y-auto space-y-2 max-h-[220px]">
-                {scanResults.length === 0 ? (
-                    <div className="text-center text-slate-400 py-8 text-sm">
-                        点击"开始扫描"检测注册表问题
-                    </div>
-                ) : (
-                    scanResults.map(result => (
-                        <div
-                            key={result.category}
-                            onClick={() => toggleCategory(result.category)}
-                            className={`p-3 rounded-lg border cursor-pointer flex items-center justify-between ${selectedCategories.has(result.category)
-                                    ? 'bg-orange-50/50 border-orange-200'
-                                    : 'bg-white/50 border-slate-100'
-                                }`}
-                        >
-                            <div className="flex items-center gap-2">
-                                <div className={`w-4 h-4 rounded border flex items-center justify-center ${selectedCategories.has(result.category) ? 'bg-orange-500 border-orange-500' : 'bg-white border-slate-300'
-                                    }`}>
-                                    {selectedCategories.has(result.category) && <Check size={10} className="text-white" />}
-                                </div>
-                                <span className={`text-sm font-medium ${selectedCategories.has(result.category) ? 'text-orange-700' : 'text-slate-600'}`}>
-                                    {result.category}
-                                </span>
-                            </div>
-                            <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${result.count > 0
-                                    ? 'text-orange-500 bg-orange-100'
-                                    : 'text-green-500 bg-green-100'
-                                }`}>
-                                {result.count}
-                            </span>
-                        </div>
-                    ))
-                )}
-            </div>
 
             {/* Recent Backups */}
-            {backups.length > 0 && (
-                <div className="mt-3 pt-3 border-t">
-                    <div className="text-xs text-slate-400 mb-1">最近备份:</div>
-                    <div className="flex flex-wrap gap-1">
-                        {backups.slice(0, 3).map(b => (
-                            <span key={b} className="text-xs bg-slate-100 px-2 py-0.5 rounded text-slate-500">
-                                {b}
-                            </span>
-                        ))}
+            <div className="flex-1">
+                <div className="flex items-center justify-between mb-3">
+                    <div className="text-xs font-bold text-slate-500 flex items-center gap-1.5 uppercase tracking-wider">
+                        <Save size={12} className="text-slate-400" />
+                        最近备份
                     </div>
                 </div>
-            )}
-
-            {/* Footer */}
-            <div className="mt-4 pt-4 border-t flex items-center justify-between">
-                <div className="flex items-center gap-2 text-xs text-slate-400">
-                    <button onClick={selectAll} className="hover:text-blue-500 transition-colors">全选</button>
-                    <span>·</span>
-                    <button onClick={selectNone} className="hover:text-blue-500 transition-colors">全不选</button>
-                    <span className="ml-2 text-slate-300">|</span>
-                    <span className="ml-2">共 {totalIssues} 项</span>
-                </div>
-                <button
-                    onClick={handleClean}
-                    disabled={isCleaning || selectedIssues === 0}
-                    className={`px-5 py-2.5 rounded-xl font-medium text-sm flex items-center gap-2 transition-all ${isCleaning || selectedIssues === 0
-                            ? 'bg-slate-100 text-slate-400'
-                            : 'bg-gradient-to-r from-orange-500 to-red-500 text-white shadow-lg hover:shadow-xl'
-                        }`}
-                >
-                    {isCleaning ? (
-                        <RefreshCw size={14} className="animate-spin" />
+                <div className="space-y-2 overflow-y-auto max-h-[260px] pr-1">
+                    {backups.length === 0 ? (
+                        <div className="text-center text-slate-400 py-10 border-2 border-dashed border-slate-100 rounded-xl text-xs">
+                            暂无备份记录
+                        </div>
                     ) : (
-                        <Trash2 size={14} />
+                        backups.map(b => (
+                            <div
+                                key={b}
+                                onClick={() => invoke('open_backup_folder')}
+                                title="点击打开本地备份文件夹"
+                                className="group p-3 rounded-xl bg-slate-50/50 border border-slate-100 hover:border-orange-200 transition-all flex items-center justify-between cursor-pointer"
+                            >
+                                <div className="flex items-center gap-3">
+                                    <div className="w-8 h-8 rounded-lg bg-white border border-slate-100 flex items-center justify-center text-slate-400 group-hover:text-orange-500 transition-colors">
+                                        <Save size={14} />
+                                    </div>
+                                    <span className="text-xs font-medium text-slate-600 truncate max-w-[200px]">
+                                        {b}
+                                    </span>
+                                </div>
+                                <div className="flex items-center gap-1">
+                                    <button
+                                        onClick={(e) => handleDeleteBackup(e, b)}
+                                        className="opacity-0 group-hover:opacity-100 p-1.5 hover:bg-red-100 text-red-600 rounded-lg transition-all"
+                                        title="删除此备份"
+                                    >
+                                        <Trash2 size={12} />
+                                    </button>
+                                </div>
+                            </div>
+                        ))
                     )}
-                    {isCleaning ? '清理中...' : `立即清理 (${selectedIssues})`}
-                </button>
+                </div>
+            </div>
+
+            {/* Hint */}
+            <div className="mt-4 pt-4 border-t border-slate-100">
+                <p className="text-[10px] text-slate-400 leading-relaxed italic">
+                    提示: 在进行系统优化前建议先备份注册表。单击备份项可快速打开本地文件夹。
+                </p>
             </div>
         </div>
     );

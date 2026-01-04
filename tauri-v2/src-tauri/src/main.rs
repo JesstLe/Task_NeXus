@@ -556,6 +556,10 @@ pub fn run() {
             task_nexus_lib::registry::clean_registry,
             task_nexus_lib::registry::list_registry_backups,
             task_nexus_lib::registry::create_full_backup,
+            task_nexus_lib::registry::restore_backup_by_name,
+            task_nexus_lib::registry::delete_backup_by_name,
+            task_nexus_lib::registry::check_admin,
+            task_nexus_lib::registry::open_backup_folder,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

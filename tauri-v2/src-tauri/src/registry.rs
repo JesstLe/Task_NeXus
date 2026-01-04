@@ -11,6 +11,46 @@ use serde::{Serialize, Deserialize};
 
 use crate::{AppError, AppResult};
 
+/// Check if the current process is running as administrator
+pub fn is_admin() -> bool {
+    #[cfg(windows)]
+    {
+        use windows::Win32::Foundation::HANDLE;
+        use windows::Win32::Security::{GetTokenInformation, TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY};
+        use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+
+        unsafe {
+            let mut token: HANDLE = HANDLE::default();
+            if OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token).is_err() {
+                return false;
+            }
+
+            let mut elevation = TOKEN_ELEVATION::default();
+            let mut size = std::mem::size_of::<TOKEN_ELEVATION>() as u32;
+
+            let result = GetTokenInformation(
+                token,
+                TokenElevation,
+                Some(&mut elevation as *mut _ as *mut _),
+                size,
+                &mut size,
+            );
+
+            let _ = windows::Win32::Foundation::CloseHandle(token);
+
+            if result.is_err() {
+                return false;
+            }
+
+            elevation.TokenIsElevated != 0
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        false
+    }
+}
+
 /// Registry scan result
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RegistryScanResult {
@@ -58,7 +98,7 @@ async fn backup_registry_internal(path: &str, key: &str) -> AppResult<()> {
         tracing::info!("Registry backup successful: {} -> {}", key, path);
         Ok(())
     } else {
-        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stderr = crate::decode_output(&output.stderr);
         Err(AppError::SystemError(format!("Registry backup failed: {}", stderr)))
     }
 }
@@ -72,30 +112,99 @@ pub async fn import_registry(path: String) -> Result<(), String> {
 }
 
 async fn import_registry_internal(path: &str) -> AppResult<()> {
-    if !Path::new(path).exists() {
+    let p = Path::new(path);
+    if !p.exists() {
         return Err(AppError::SystemError(format!("File not found: {}", path)));
     }
 
+    // Get absolute path for reg.exe
+    let abs_path = if p.is_absolute() {
+        p.to_path_buf()
+    } else {
+        std::env::current_dir()?.join(p)
+    };
+
     // Use reg.exe for import
     let output = Command::new("reg")
-        .args(["import", path])
+        .args(["import", &abs_path.to_string_lossy()])
         .creation_flags(0x08000000) // CREATE_NO_WINDOW
         .output()
         .map_err(|e| AppError::SystemError(format!("Failed to execute reg.exe: {}", e)))?;
 
     if output.status.success() {
-        tracing::info!("Registry import successful: {}", path);
+        tracing::info!("Registry import successful: {}", abs_path.display());
         Ok(())
     } else {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        Err(AppError::SystemError(format!("Registry import failed: {}", stderr)))
+        let stderr = crate::decode_output(&output.stderr);
+        let stdout = crate::decode_output(&output.stdout);
+        let error_msg = if !stderr.is_empty() { stderr } else { stdout };
+        Err(AppError::SystemError(format!("Registry import failed: {}", error_msg)))
     }
 }
 
 /// Restore registry from a backup file (same as import)
 #[tauri::command]
 pub async fn restore_registry(path: String) -> Result<(), String> {
-    import_registry(path).await
+    import_registry_internal(&path)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Restore a backup file by name from the app's backup directory
+#[tauri::command]
+pub async fn restore_backup_by_name(name: String) -> Result<(), String> {
+    let mut path = get_backup_directory();
+    path.push(name);
+    
+    if !path.exists() {
+        return Err("备份文件不存在".to_string());
+    }
+
+    import_registry_internal(&path.to_string_lossy())
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Delete a backup file by name from the app's backup directory
+#[tauri::command]
+pub async fn delete_backup_by_name(name: String) -> Result<(), String> {
+    let mut path = get_backup_directory();
+    path.push(name);
+    
+    if !path.exists() {
+        return Err("备份文件不存在".to_string());
+    }
+
+    fs::remove_file(path)
+        .map_err(|e| format!("无法删除备份文件: {}", e))
+}
+
+/// Check if app is running as administrator
+#[tauri::command]
+pub async fn check_admin() -> bool {
+    is_admin()
+}
+
+/// Open the backup directory in Windows Explorer
+#[tauri::command]
+pub async fn open_backup_folder() -> Result<(), String> {
+    let path = get_backup_directory();
+    if !path.exists() {
+        fs::create_dir_all(&path).map_err(|e| format!("无法创建备份目录: {}", e))?;
+    }
+
+    #[cfg(windows)]
+    {
+        Command::new("explorer")
+            .arg(path)
+            .spawn()
+            .map_err(|e| format!("无法打开文件夹: {}", e))?;
+        Ok(())
+    }
+    #[cfg(not(windows))]
+    {
+        Err("仅支持 Windows 平台".to_string())
+    }
 }
 
 /// Scan registry for invalid entries
@@ -141,7 +250,58 @@ async fn scan_registry_internal() -> AppResult<Vec<RegistryScanResult>> {
         items: dll_issues,
     });
 
+    // 5. Check invalid App Paths
+    let app_path_issues = scan_app_paths().await?;
+    results.push(RegistryScanResult {
+        category: "无效的应用路径".to_string(),
+        count: app_path_issues.len() as u32,
+        items: app_path_issues,
+    });
+
+    // 6. Check Muicache
+    let mui_issues = scan_mui_cache().await?;
+    results.push(RegistryScanResult {
+        category: "无效的MUI缓存".to_string(),
+        count: mui_issues.len() as u32,
+        items: mui_issues,
+    });
+
+    // 7. Check ActiveX/COM (CLSID)
+    let clsid_issues = scan_clsid().await?;
+    results.push(RegistryScanResult {
+        category: "无效的ActiveX/COM组件".to_string(),
+        count: clsid_issues.len() as u32,
+        items: clsid_issues,
+    });
+
+    // 8. Check IFEO (Image Hijack)
+    let ifeo_issues = scan_ifeo().await?;
+    results.push(RegistryScanResult {
+        category: "映像劫持/IFEO".to_string(),
+        count: ifeo_issues.len() as u32,
+        items: ifeo_issues,
+    });
+
     Ok(results)
+}
+
+/// Check if a registry path is in the safety whitelist
+fn is_whitelisted(path: &str) -> bool {
+    let lower = path.to_lowercase();
+    // Never touch critical Windows components
+    let whitelist = [
+        "microsoft\\windows\\currentversion\\installer",
+        "microsoft\\windows nt\\currentversion\\winlogon",
+        "microsoft\\windows\\currentversion\\policies",
+        "system\\currentcontrolset\\control",
+    ];
+
+    for item in whitelist {
+        if lower.contains(item) {
+            return true;
+        }
+    }
+    false
 }
 
 /// Scan HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall for invalid entries
@@ -158,6 +318,12 @@ async fn scan_uninstall_entries() -> AppResult<Vec<RegistryIssue>> {
     for (hkey, path) in paths {
         if let Ok(uninstall_key) = RegKey::predef(hkey).open_subkey(path) {
             for subkey_name in uninstall_key.enum_keys().filter_map(|x| x.ok()) {
+                let full_path = format!("{}\\{}\\{}", 
+                    if hkey == HKEY_LOCAL_MACHINE { "HKLM" } else { "HKCU" },
+                    path, subkey_name);
+                
+                if is_whitelisted(&full_path) { continue; }
+
                 if let Ok(subkey) = uninstall_key.open_subkey(&subkey_name) {
                     // Check UninstallString
                     if let Ok(uninstall_string) = subkey.get_value::<String, _>("UninstallString") {
@@ -258,19 +424,75 @@ async fn scan_file_associations() -> AppResult<Vec<RegistryIssue>> {
     Ok(issues)
 }
 
+/// Scan App Paths for invalid executable references
+async fn scan_app_paths() -> AppResult<Vec<RegistryIssue>> {
+    let mut issues = Vec::new();
+    let paths = [
+        (HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths"),
+        (HKEY_CURRENT_USER, r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths"),
+    ];
+
+    for (hkey, path) in paths {
+        if let Ok(app_paths) = RegKey::predef(hkey).open_subkey(path) {
+            for subkey_name in app_paths.enum_keys().filter_map(|x| x.ok()) {
+                if let Ok(subkey) = app_paths.open_subkey(&subkey_name) {
+                    if let Ok(exe_path) = subkey.get_value::<String, _>("") {
+                        let trimmed = exe_path.trim_matches('"');
+                        if !trimmed.is_empty() && !Path::new(trimmed).exists() {
+                            issues.push(RegistryIssue {
+                                path: format!("{}\\{}\\{}", 
+                                    if hkey == HKEY_LOCAL_MACHINE { "HKLM" } else { "HKCU" },
+                                    path, subkey_name),
+                                value_name: Some("".to_string()),
+                                issue_type: "invalid_path".to_string(),
+                                details: format!("应用路径不存在: {}", trimmed),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Ok(issues)
+}
+
+/// Scan MUI Cache for invalid file references
+async fn scan_mui_cache() -> AppResult<Vec<RegistryIssue>> {
+    let mut issues = Vec::new();
+    let path = r"Software\Classes\Local Settings\Software\Microsoft\Windows\Shell\MuiCache";
+    
+    if let Ok(mui_cache) = RegKey::predef(HKEY_CURRENT_USER).open_subkey(path) {
+        for (name, _value) in mui_cache.enum_values().filter_map(|x| x.ok()) {
+            // MuiCache names are often paths like "C:\Path\To\Exe.FriendlyAppName"
+            // or just the path itself.
+            let potential_path = name.split(".FriendlyAppName").next().unwrap_or("");
+            
+            if potential_path.contains('\\') && !Path::new(potential_path).exists() {
+                issues.push(RegistryIssue {
+                    path: format!("HKCU\\{}", path),
+                    value_name: Some(name.clone()),
+                    issue_type: "invalid_path".to_string(),
+                    details: format!("MUI缓存指向不存在的文件: {}", potential_path),
+                });
+            }
+        }
+    }
+    Ok(issues)
+}
+
 /// Scan shared DLLs for invalid references
 async fn scan_shared_dlls() -> AppResult<Vec<RegistryIssue>> {
     let mut issues = Vec::new();
 
     let path = r"SOFTWARE\Microsoft\Windows\CurrentVersion\SharedDLLs";
     
-    if let Ok(shared_dlls) = RegKey::predef(HKEY_LOCAL_MACHINE).open_subkey(path) {
-        // Limit scan to prevent excessive processing
-        let mut count = 0;
-        for (dll_path, _value) in shared_dlls.enum_values().filter_map(|x| x.ok()) {
-            if count > 100 { break; } // Limit for performance
-            
-            if !Path::new(&dll_path).exists() {
+    if is_whitelisted(path) { return Ok(issues); }
+
+    // Check both 32/64 bit views if applicable, but winreg handles standard views well
+    if let Ok(shared_dlls) = RegKey::predef(HKEY_LOCAL_MACHINE).open_subkey_with_flags(path, KEY_READ | KEY_WOW64_64KEY) {
+        // Limit scan to prevent excessive processing in a single pass
+        for (dll_path, _value) in shared_dlls.enum_values().filter_map(|x| x.ok()).take(500) {
+            if !dll_path.is_empty() && !Path::new(&dll_path).exists() {
                 issues.push(RegistryIssue {
                     path: format!("HKLM\\{}", path),
                     value_name: Some(dll_path.clone()),
@@ -278,10 +500,71 @@ async fn scan_shared_dlls() -> AppResult<Vec<RegistryIssue>> {
                     details: format!("共享DLL不存在: {}", dll_path),
                 });
             }
-            count += 1;
         }
     }
 
+    Ok(issues)
+}
+
+/// Scan HKCR\CLSID for invalid COM components
+async fn scan_clsid() -> AppResult<Vec<RegistryIssue>> {
+    let mut issues = Vec::new();
+    let clsid_path = r"CLSID";
+    
+    if let Ok(clsid_key) = RegKey::predef(HKEY_CLASSES_ROOT).open_subkey(clsid_path) {
+        // Limit to 1000 items to avoid freezing for minutes
+        for subkey_name in clsid_key.enum_keys().filter_map(|x| x.ok()).take(1000) {
+            let full_path = format!("HKCR\\CLSID\\{}", subkey_name);
+            if is_whitelisted(&full_path) { continue; }
+
+            if let Ok(subkey) = clsid_key.open_subkey(&subkey_name) {
+                // Check InprocServer32 and LocalServer32
+                for server_type in ["InprocServer32", "LocalServer32"] {
+                    if let Ok(server_key) = subkey.open_subkey(server_type) {
+                        if let Ok(server_path) = server_key.get_value::<String, _>("") {
+                            let clean_path = extract_path_from_command(&server_path);
+                            if !clean_path.is_empty() && !Path::new(&clean_path).exists() {
+                                issues.push(RegistryIssue {
+                                    path: format!("HKCR\\CLSID\\{}\\{}", subkey_name, server_type),
+                                    value_name: Some("".to_string()),
+                                    issue_type: "invalid_com".to_string(),
+                                    details: format!("COM服务器不存在: {}", clean_path),
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Ok(issues)
+}
+
+/// Scan IFEO for debugger hijacks
+async fn scan_ifeo() -> AppResult<Vec<RegistryIssue>> {
+    let mut issues = Vec::new();
+    let path = r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options";
+    
+    if is_whitelisted(path) { return Ok(issues); }
+
+    if let Ok(ifeo_key) = RegKey::predef(HKEY_LOCAL_MACHINE).open_subkey(path) {
+        for subkey_name in ifeo_key.enum_keys().filter_map(|x| x.ok()) {
+            if let Ok(subkey) = ifeo_key.open_subkey(&subkey_name) {
+                if let Ok(debugger) = subkey.get_value::<String, _>("Debugger") {
+                    let clean_path = extract_path_from_command(&debugger);
+                    // If debugger is set to something non-existent or "null" (malicious often use this)
+                    if !clean_path.is_empty() && !Path::new(&clean_path).exists() {
+                        issues.push(RegistryIssue {
+                            path: format!("HKLM\\{}\\{}", path, subkey_name),
+                            value_name: Some("Debugger".to_string()),
+                            issue_type: "ifeo_hijack".to_string(),
+                            details: format!("发现IFEO调试器劫持 (可能指向不存在的文件): {}", debugger),
+                        });
+                    }
+                }
+            }
+        }
+    }
     Ok(issues)
 }
 
@@ -298,7 +581,7 @@ async fn clean_registry_internal(issues: Vec<RegistryIssue>) -> AppResult<u32> {
 
     for issue in issues {
         let result = match issue.issue_type.as_str() {
-            "invalid_path" | "invalid_startup" | "invalid_dll" => {
+            "invalid_path" | "invalid_startup" | "invalid_dll" | "invalid_com" | "ifeo_hijack" => {
                 // For these, we delete the value or subkey
                 delete_registry_item(&issue.path, issue.value_name.as_deref()).await
             }
@@ -309,11 +592,14 @@ async fn clean_registry_internal(issues: Vec<RegistryIssue>) -> AppResult<u32> {
             _ => continue,
         };
 
-        if result.is_ok() {
-            cleaned += 1;
-            tracing::info!("Cleaned registry entry: {:?}", issue);
-        } else {
-            tracing::warn!("Failed to clean: {:?}", issue);
+        match result {
+            Ok(_) => {
+                cleaned += 1;
+                tracing::info!("Cleaned registry entry: {:?}", issue);
+            }
+            Err(e) => {
+                tracing::warn!("Failed to clean {:?}: {}", issue, e);
+            }
         }
     }
 
@@ -325,44 +611,58 @@ async fn delete_registry_item(path: &str, value_name: Option<&str>) -> AppResult
     // Parse the path
     let parts: Vec<&str> = path.splitn(2, '\\').collect();
     if parts.len() < 2 {
-        return Err(AppError::SystemError("Invalid registry path".to_string()));
+        return Err(AppError::SystemError(format!("Invalid registry path: {}", path)));
     }
 
     let hkey = match parts[0] {
         "HKLM" => HKEY_LOCAL_MACHINE,
         "HKCU" => HKEY_CURRENT_USER,
         "HKCR" => HKEY_CLASSES_ROOT,
-        _ => return Err(AppError::SystemError("Unknown registry hive".to_string())),
+        _ => return Err(AppError::SystemError(format!("Unknown registry hive: {}", parts[0]))),
     };
 
     let subpath = parts[1];
+    let flags = KEY_WRITE | KEY_WOW64_64KEY;
 
-    // Open with write access
-    match RegKey::predef(hkey).open_subkey_with_flags(subpath, KEY_WRITE) {
-        Ok(key) => {
-            if let Some(value) = value_name {
-                key.delete_value(value)
-                    .map_err(|e| AppError::SystemError(format!("Failed to delete value: {}", e)))?;
-            }
-            Ok(())
-        }
-        Err(_) => {
-            // If we can't open for write, try deleting the entire subkey
-            if value_name.is_none() {
-                // Find parent key and delete the subkey
-                if let Some(last_sep) = subpath.rfind('\\') {
-                    let parent_path = &subpath[..last_sep];
-                    let subkey_name = &subpath[last_sep + 1..];
-                    
-                    if let Ok(parent) = RegKey::predef(hkey).open_subkey_with_flags(parent_path, KEY_WRITE) {
-                        parent.delete_subkey_all(subkey_name)
-                            .map_err(|e| AppError::SystemError(format!("Failed to delete subkey: {}", e)))?;
-                        return Ok(());
-                    }
+    // Case 1: Delete a specific value
+    if let Some(value) = value_name {
+        if !value.is_empty() {
+            match RegKey::predef(hkey).open_subkey_with_flags(subpath, flags) {
+                Ok(key) => {
+                    key.delete_value(value)
+                        .map_err(|e| AppError::SystemError(format!("Failed to delete value '{}' at {}: {}", value, path, e)))?;
+                    return Ok(());
                 }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    tracing::info!("Registry path not found, assuming value already deleted: {}", path);
+                    return Ok(());
+                }
+                Err(e) => return Err(AppError::SystemError(format!("Failed to access registry key {}: {}", path, e))),
             }
-            Err(AppError::SystemError("Failed to access registry key".to_string()))
         }
+    }
+
+    // Case 2: Delete a subkey (if value_name is None, empty string, or we specifically want to remove the path)
+    if let Some(last_sep) = subpath.rfind('\\') {
+        let parent_path = &subpath[..last_sep];
+        let subkey_name = &subpath[last_sep + 1..];
+        
+        match RegKey::predef(hkey).open_subkey_with_flags(parent_path, flags) {
+            Ok(parent) => {
+                parent.delete_subkey_all(subkey_name)
+                    .map_err(|e| AppError::SystemError(format!("Failed to delete subkey '{}' at {}: {}", subkey_name, parent_path, e)))?;
+                Ok(())
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                tracing::info!("Parent registry key not found, assuming subkey already deleted: {}", parent_path);
+                Ok(())
+            }
+            Err(e) => Err(AppError::SystemError(format!("Failed to access parent registry key {}: {}", parent_path, e))),
+        }
+    } else {
+        // If no separator, it's a top-level subkey of the hive
+        RegKey::predef(hkey).delete_subkey_all(subpath)
+            .map_err(|e| AppError::SystemError(format!("Failed to delete top-level subkey '{}': {}", subpath, e)))
     }
 }
 
@@ -382,19 +682,30 @@ fn extract_path_from_command(command: &str) -> String {
         return String::new(); // Skip MSI commands, they're typically valid
     }
     
-    // Handle simple paths (space-delimited)
-    if let Some(space) = command.find(' ') {
-        let path = &command[..space];
-        if path.contains('\\') || path.contains('/') {
-            return path.to_string();
-        }
-    }
-    
-    // If no space, check if the whole thing is a path
+    // Handle simple paths (check if the whole thing or until first space exists)
     if command.contains('\\') || command.contains('/') {
-        // Check if it ends with .exe
-        if command.to_lowercase().ends_with(".exe") {
+        // If the whole command exists, it's a valid path
+        if Path::new(command).exists() {
             return command.to_string();
+        }
+
+        // Try to find the longest prefix that exists as a file
+        let mut current = command;
+        while let Some(space) = current.rfind(' ') {
+            current = &current[..space];
+            let trimmed = current.trim_matches('"');
+            if !trimmed.is_empty() && Path::new(trimmed).exists() {
+                return trimmed.to_string();
+            }
+        }
+        
+        // If it ends with .exe and contains spaces but no quotes, 
+        // Windows might still find it. We should be careful not to flag it if it actually exists.
+        // But here we are looking for what DOES exist.
+        
+        // Return first token as a fallback for scanning
+        if let Some(space) = command.find(' ') {
+            return command[..space].to_string();
         }
     }
     
