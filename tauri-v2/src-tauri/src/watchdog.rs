@@ -128,13 +128,22 @@ pub async fn check_and_restrain(processes: &[ProcessInfo]) {
         return;
     }
 
-    // 2. Calculate Total System Load
-    // processes.cpu_usage sum is usually 0..CoreCount*100 on Windows sysinfo
-    // We need normalized % (0..100)
+    // 2. Identify if any game is running (matching UI "当游戏运行时")
+    let game_list: Vec<String> = config.game_list.iter().map(|s| s.to_lowercase()).collect();
+    let is_any_game_running = processes.iter().any(|p| {
+        let name_lower = p.name.to_lowercase();
+        game_list.iter().any(|g| name_lower.contains(g))
+    });
+
+    if !is_any_game_running {
+        // Only restrain when a game is detected
+        restore_all().await;
+        return;
+    }
+
+    // 3. Calculate Total System Load
     let system = sysinfo::System::new_all();
     let logical_cores = system.cpus().len() as f32;
-    // Actually `processes` passed in has cpu_usage from direct sysinfo call in monitor.
-    // Summing them gives total load roughly.
     let total_cpu_sum: f32 = processes.iter().map(|p| p.cpu_usage).sum();
     let total_cpu_percent = if logical_cores > 0.0 {
         total_cpu_sum / logical_cores
@@ -142,56 +151,54 @@ pub async fn check_and_restrain(processes: &[ProcessInfo]) {
         0.0
     };
 
-    // 3. Logic
+    // 4. Logic
     let threshold = pb_config.cpu_threshold;
 
-    // Simple state machine: if load > threshold, restrain. Else restore.
     if total_cpu_percent > threshold {
-        // High Load - Find culprits
-        restrain_processes(processes, &pb_config.excluded_processes).await;
+        // High Load while Gaming - Find background culprits
+        restrain_processes(processes, &pb_config.excluded_processes, &game_list).await;
     } else {
         // Normal Load - Restore
         restore_all().await;
     }
 }
 
-async fn restrain_processes(processes: &[ProcessInfo], excludes: &[String]) {
+async fn restrain_processes(processes: &[ProcessInfo], excludes: &[String], games: &[String]) {
     let mut restrained = RESTRAINED_PIDS.write();
     let foreground_pid = governor::get_foreground_window_pid().unwrap_or(0);
 
     for p in processes {
+        let name_lower = p.name.to_lowercase();
+
         // Criteria to Restrain:
         // 1. Not already Idle/BelowNormal
-        // 2. Not Foreground
-        // 3. Not Excluded
-        // 4. Using significant CPU? (Optional, maybe > 1%?)
-        // Let's assume ANY process > Normal priority is a candidate?
-        // Or actually, usually we restrain "Normal" processes to "BelowNormal".
-        // We shouldn't touch High/RealTime usually unless aggressive?
-        // For safety V1: Restrain 'Normal' and 'AboveNormal' to 'BelowNormal'.
-
         let current_pri = &p.priority;
         let is_target_pri =
-            current_pri == "Normal" || current_pri == "AboveNormal" || current_pri == "High"; // Include High? Maybe.
+            current_pri == "Normal" || current_pri == "AboveNormal" || current_pri == "High";
 
         if !is_target_pri {
             continue;
         }
 
+        // 2. Not Foreground
         if p.pid == foreground_pid {
             continue;
         }
 
+        // 3. Not in Game List (Games should never be suppressed)
+        if games.iter().any(|g| name_lower.contains(g)) {
+            continue;
+        }
+
+        // 4. Not Excluded (Manual exclusion)
         if excludes
             .iter()
-            .any(|ex| p.name.to_lowercase().contains(&ex.to_lowercase()))
+            .any(|ex| name_lower.contains(&ex.to_lowercase()))
         {
             continue;
         }
 
-        // Only restrain if using some CPU (e.g. > 0.5% normalized)
-        // If it's idle, lowering priority does nothing useful.
-        // cpu_usage is unnormalized here (0..100*Cores)
+        // 5. Using significant CPU?
         if p.cpu_usage < 1.0 {
             continue;
         }
@@ -199,7 +206,7 @@ async fn restrain_processes(processes: &[ProcessInfo], excludes: &[String]) {
         // ACT: Restrain
         if !restrained.contains(&p.pid) {
             tracing::info!(
-                "ProBalance: Restraining PID {} ({}) - CPU: {}",
+                "ProBalance: Restraining Background process PID {} ({}) - CPU: {}",
                 p.pid,
                 p.name,
                 p.cpu_usage
@@ -225,5 +232,64 @@ async fn restore_all() {
         // Ideal: Restore to original. But we didn't store it.
         // Most apps are Normal.
         let _ = governor::set_priority(pid, PriorityLevel::Normal).await;
+    }
+}
+pub async fn apply_default_rules(processes: &[ProcessInfo]) {
+    let config = config::get_config().await.unwrap_or_default();
+    let rules = config.default_rules;
+
+    if !rules.enabled {
+        return;
+    }
+
+    let profiles = config::get_profiles().await.unwrap_or_default();
+    let game_list: Vec<String> = config.game_list.iter().map(|s| s.to_lowercase()).collect();
+
+    for p in processes {
+        let name_lower = p.name.to_lowercase();
+
+        // 1. 跳过已经有特定 Profile 的进程
+        if profiles.iter().any(|pr| pr.name.to_lowercase() == name_lower && pr.enabled) {
+            continue;
+        }
+
+        // 2. 判定是否在游戏列表中
+        let is_game = game_list.iter().any(|g| name_lower.contains(g));
+
+        // 3. 应用规则
+        if is_game {
+            // 应用游戏规则 (P-Core/CCD0)
+            if let Some(mask) = &rules.game_mask {
+                if p.cpu_affinity != *mask && p.cpu_affinity != format!("{:#x}", u64::from_str_radix(mask, 16).unwrap_or(0)) {
+                    tracing::info!("DefaultRules: Mapping game {} to {}", p.name, mask);
+                    let _ = governor::set_process_affinity(p.pid, mask.clone()).await;
+                }
+            }
+            if let Some(level) = PriorityLevel::from_str(&rules.game_priority) {
+                if p.priority != rules.game_priority {
+                    let _ = governor::set_priority(p.pid, level).await;
+                }
+            }
+        } else {
+            // 应用系统/背景规则 (E-Core/CCD1)
+            // 跳过核心进程
+            if name_lower == "explorer.exe" || name_lower == "task-nexus.exe" || name_lower == "system" {
+                continue;
+            }
+
+            if let Some(mask) = &rules.system_mask {
+                if p.cpu_affinity != *mask && p.cpu_affinity != format!("{:#x}", u64::from_str_radix(mask, 16).unwrap_or(0)) {
+                    // 仅对有一定负载或特定优先级的背景进程应用，避免对所有空闲进程操作
+                    if p.cpu_usage > 0.1 || p.priority != "Normal" {
+                        let _ = governor::set_process_affinity(p.pid, mask.clone()).await;
+                    }
+                }
+            }
+            if let Some(level) = PriorityLevel::from_str(&rules.system_priority) {
+                if p.priority != rules.system_priority {
+                    let _ = governor::set_priority(p.pid, level).await;
+                }
+            }
+        }
     }
 }

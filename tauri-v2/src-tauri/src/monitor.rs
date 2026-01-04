@@ -110,6 +110,7 @@ impl ProcessMonitor {
                 // ProBalance Watchdog, Profile Enforcement & Smart Trim Check
                 tauri::async_runtime::block_on(async {
                     crate::watchdog::enforce_profiles(&processes).await;
+                    crate::watchdog::apply_default_rules(&processes).await;
                     crate::watchdog::check_and_restrain(&processes).await;
                     crate::watchdog::check_and_trim_memory().await;
                 });
