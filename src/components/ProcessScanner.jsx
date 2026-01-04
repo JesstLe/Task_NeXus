@@ -102,13 +102,9 @@ export default function ProcessScanner({ processes, selectedPid, onSelect, onSca
   const handleContextMenu = (e, process) => {
     e.preventDefault();
     e.stopPropagation();
-    // Calculate simple position, avoid overflow bottom if possible? 
-    // For simplicity, just use mouse or button position.
-    // If triggered by button, e might be synthetic.
     let x = e.pageX;
     let y = e.pageY;
 
-    // Fallback if event is not mouse
     if (!x && !y) {
       const rect = e.target.getBoundingClientRect();
       x = rect.left;
@@ -116,6 +112,26 @@ export default function ProcessScanner({ processes, selectedPid, onSelect, onSca
     }
 
     setMenuState({ visible: true, x, y, process });
+  };
+
+  // Bulk Action Handler - applies priority to all selected processes
+  const handleBulkAction = async (priority) => {
+    if (selectedPids.size === 0) return;
+
+    try {
+      const promises = Array.from(selectedPids).map(pid => {
+        if (window.electron?.setProcessPriority) {
+          return window.electron.setProcessPriority(pid, priority);
+        }
+        return Promise.resolve();
+      });
+
+      await Promise.all(promises);
+      setSelectedPids(new Set()); // Clear selection after action
+      onScan(); // Refresh the list
+    } catch (e) {
+      console.error('Bulk action failed:', e);
+    }
   };
 
   const handleMenuAction = async (action) => {
