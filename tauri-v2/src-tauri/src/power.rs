@@ -23,7 +23,7 @@ pub async fn get_current_power_plan() -> AppResult<serde_json::Value> {
             .output()
             .map_err(|e| AppError::SystemError(e.to_string()))?;
         
-        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stdout = crate::decode_output(&output.stdout);
         
         // 解析 GUID
         if let Some(guid) = extract_guid(&stdout) {
@@ -80,7 +80,7 @@ pub async fn set_power_plan(plan: &str) -> AppResult<serde_json::Value> {
                 "plan": plan
             }))
         } else {
-            let stderr = String::from_utf8_lossy(&output.stderr);
+            let stderr = crate::decode_output(&output.stderr);
             Err(AppError::SystemError(stderr.to_string()))
         }
     })
@@ -104,7 +104,7 @@ pub async fn list_power_plans() -> AppResult<serde_json::Value> {
             .output()
             .map_err(|e| AppError::SystemError(e.to_string()))?;
         
-        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stdout = crate::decode_output(&output.stdout);
         let mut plans = Vec::new();
         
         for line in stdout.lines() {

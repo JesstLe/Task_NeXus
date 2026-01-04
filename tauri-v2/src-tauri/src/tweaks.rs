@@ -119,7 +119,7 @@ pub async fn apply_tweaks(tweak_ids: &[String]) -> AppResult<serde_json::Value> 
                         success_count += 1;
                     }
                     Ok(out) => {
-                        let stderr = String::from_utf8_lossy(&out.stderr);
+                        let stderr = crate::decode_output(&out.stderr);
                         errors.push(format!("{}: {}", tweak.name, stderr.trim()));
                     }
                     Err(e) => {

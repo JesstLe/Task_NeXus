@@ -3319,6 +3319,7 @@ name = "task-nexus"
 version = "3.0.0"
 dependencies = [
  "anyhow",
+ "encoding_rs",
  "once_cell",
  "parking_lot",
  "serde",

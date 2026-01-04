@@ -8,6 +8,12 @@ pub mod tweaks;
 
 use serde::{Deserialize, Serialize};
 
+/// 解码系统命令输出 (GBK -> UTF-8)
+pub fn decode_output(bytes: &[u8]) -> String {
+    let (cow, _, _) = encoding_rs::GBK.decode(bytes);
+    cow.to_string()
+}
+
 // ============================================================================
 // 进程信息
 // ============================================================================
