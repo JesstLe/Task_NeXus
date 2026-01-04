@@ -38,4 +38,9 @@ contextBridge.exposeInMainWorld('electron', {
   // Config Sharing
   exportConfig: () => ipcRenderer.invoke('export-config'),
   importConfig: () => ipcRenderer.invoke('import-config'),
+
+  // License System
+  getMachineId: () => ipcRenderer.invoke('get-machine-id'),
+  getLicenseStatus: () => ipcRenderer.invoke('get-license-status'),
+  activateLicense: (key) => ipcRenderer.invoke('activate-license', key),
 });

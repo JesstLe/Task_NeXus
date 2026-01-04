@@ -2,6 +2,7 @@ const { app, BrowserWindow, ipcMain, Tray, Menu, nativeImage, shell } = require(
 const path = require('path');
 const os = require('os');
 const fs = require('fs');
+const crypto = require('crypto');
 const { exec } = require('child_process');
 
 let mainWindow = null;
@@ -116,8 +117,18 @@ const DEFAULT_CONFIG = {
   },
 
   // 后台进程限制列表 - 当游戏运行时，将这些进程的优先级降低到 Idle
-  throttleList: []
+  throttleList: [],
+
+  // 许可证信息
+  license: {
+    activated: false,
+    key: '',
+    machineId: ''
+  }
 };
+
+// 许可证密钥 (请勿泄露)
+const LICENSE_SECRET = 'TN_2024_K7x9Qm3Wp5Yz8Rv2';
 
 let appConfig = { ...DEFAULT_CONFIG };
 
@@ -158,6 +169,59 @@ function updateLoginItemSettings() {
     path: app.getPath('exe'),
   };
   app.setLoginItemSettings(settings);
+}
+
+// --- 许可证系统 ---
+
+// 获取机器唯一标识 (基于硬件特征)
+function getMachineId() {
+  return new Promise((resolve) => {
+    if (process.platform !== 'win32') {
+      // macOS/Linux: 使用 hostname + cpus 作为简单标识
+      const cpuModel = os.cpus()[0]?.model || 'unknown';
+      const hostname = os.hostname();
+      const hash = crypto.createHash('sha256').update(cpuModel + hostname).digest('hex').substring(0, 16).toUpperCase();
+      resolve(hash);
+      return;
+    }
+
+    // Windows: 获取 CPU ID + MAC 地址 + 硬盘序列号
+    const getInfo = (cmd) => new Promise((res) => {
+      exec(cmd, { timeout: 5000 }, (err, stdout) => {
+        res(err ? '' : stdout.trim());
+      });
+    });
+
+    Promise.all([
+      getInfo('wmic cpu get processorid /VALUE'),
+      getInfo('wmic baseboard get serialnumber /VALUE'),
+      getInfo('getmac /fo csv /nh')
+    ]).then(([cpuId, boardSerial, mac]) => {
+      // 提取值
+      const cpu = cpuId.split('=')[1]?.trim() || '';
+      const board = boardSerial.split('=')[1]?.trim() || '';
+      const macAddr = mac.split(',')[0]?.replace(/"/g, '') || '';
+
+      // 组合并哈希
+      const combined = `${cpu}-${board}-${macAddr}`;
+      const hash = crypto.createHash('sha256').update(combined).digest('hex').substring(0, 16).toUpperCase();
+      resolve(hash);
+    });
+  });
+}
+
+// 生成许可证密钥 (仅供生成工具使用)
+function generateLicenseKey(machineId) {
+  const hmac = crypto.createHmac('sha256', LICENSE_SECRET);
+  hmac.update(machineId);
+  return hmac.digest('hex').substring(0, 16).toUpperCase();
+}
+
+// 验证许可证密钥
+function verifyLicense(machineId, licenseKey) {
+  if (!machineId || !licenseKey) return false;
+  const expectedKey = generateLicenseKey(machineId);
+  return licenseKey.toUpperCase() === expectedKey;
 }
 
 // --- 进程监控 ---
@@ -1447,6 +1511,49 @@ ipcMain.handle('set-timer-resolution', async (event, periodMs) => {
 // 获取定时器分辨率状态
 ipcMain.handle('get-timer-resolution', async () => {
   return { enabled: currentTimerResolution > 0, resolution: currentTimerResolution };
+});
+
+// --- 许可证 IPC ---
+
+// 获取机器码
+ipcMain.handle('get-machine-id', async () => {
+  try {
+    const machineId = await getMachineId();
+    return { success: true, machineId };
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+});
+
+// 获取许可证状态
+ipcMain.handle('get-license-status', async () => {
+  return {
+    activated: !!appConfig.license?.activated,
+    machineId: appConfig.license?.machineId || ''
+  };
+});
+
+// 激活许可证
+ipcMain.handle('activate-license', async (event, licenseKey) => {
+  try {
+    const machineId = await getMachineId();
+    const isValid = verifyLicense(machineId, licenseKey);
+
+    if (isValid) {
+      appConfig.license = {
+        activated: true,
+        key: licenseKey.toUpperCase(),
+        machineId: machineId
+      };
+      saveConfig();
+      writeLog('INFO', `License activated successfully for machine: ${machineId}`);
+      return { success: true, message: '激活成功！' };
+    } else {
+      return { success: false, message: '激活码无效，请检查后重试' };
+    }
+  } catch (e) {
+    return { success: false, message: e.message };
+  }
 });
 
 // --- Settings IPC ---

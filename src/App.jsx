@@ -7,6 +7,7 @@ import ControlBar from './components/ControlBar';
 import SettingsPanel from './components/SettingsPanel';
 import SystemOptimizer from './components/SystemOptimizer';
 import Toast, { ToastContainer } from './components/Toast';
+import ActivationDialog from './components/ActivationDialog';
 import { Activity, Settings, Zap } from 'lucide-react';
 import { getCpuArchitecture } from './data/cpuDatabase';
 
@@ -26,6 +27,7 @@ function App() {
   const [priority, setPriority] = useState('Normal');
   const [toasts, setToasts] = useState([]);
   const [selectedPids, setSelectedPids] = useState(new Set());
+  const [isActivated, setIsActivated] = useState(true); // Default true for smoother UX
 
   const showToast = (message, type = 'success', duration = 3000) => {
     const id = Date.now() + Math.random();
@@ -50,6 +52,10 @@ function App() {
 
           const savedSettings = await window.electron.getSettings();
           setSettings(savedSettings || {});
+
+          // 检查许可证状态
+          const licenseStatus = await window.electron.getLicenseStatus();
+          setIsActivated(licenseStatus.activated);
 
           // 检测 CPU 架构（AMD CCD 或 Intel 混合架构）
           const arch = getCpuArchitecture(info.model);
@@ -371,6 +377,11 @@ function App() {
 
   return (
     <div className="flex flex-col h-screen bg-gradient-to-br from-slate-50 via-white to-violet-50 overflow-hidden">
+      {/* Activation Dialog - shown when not activated */}
+      {!isActivated && (
+        <ActivationDialog onActivated={() => setIsActivated(true)} />
+      )}
+
       <Header cpuModel={cpuInfo?.model} />
 
       {/* Tab Navigation */}
