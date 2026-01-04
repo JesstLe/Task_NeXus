@@ -25,9 +25,34 @@ const SimpleContextMenu = ({ x, y, process, onClose, onAction }) => {
   }, [onClose]);
 
   // Adjust position if close to edge
+  const [position, setPosition] = React.useState({ top: y, left: x });
+
+  useEffect(() => {
+    if (menuRef.current) {
+      const rect = menuRef.current.getBoundingClientRect();
+      const viewportHeight = window.innerHeight;
+      const viewportWidth = window.innerWidth;
+
+      let newTop = y;
+      let newLeft = x;
+
+      // Vertical adjustment: Flip up if bottom overflows
+      if (y + rect.height > viewportHeight) {
+        newTop = y - rect.height;
+      }
+
+      // Horizontal adjustment: Shift left if right overflows
+      if (x + rect.width > viewportWidth) {
+        newLeft = viewportWidth - rect.width - 10;
+      }
+
+      setPosition({ top: newTop, left: newLeft });
+    }
+  }, [x, y]);
+
   const style = {
-    top: y,
-    left: x,
+    top: position.top,
+    left: position.left,
   };
 
   return (
