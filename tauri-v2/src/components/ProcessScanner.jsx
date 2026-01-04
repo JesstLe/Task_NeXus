@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import ReactDOM from 'react-dom';
-import { Search, RefreshCw, CheckSquare, Square, Zap, Gauge, MoreHorizontal, ArrowUp, ArrowDown, Minus, XCircle, ChevronRight, Cpu } from 'lucide-react';
+import { Search, CheckSquare, Square, Zap, XCircle, ChevronRight, Cpu, Play, Pause, ArrowUp, ArrowDown } from 'lucide-react';
 import { listen } from '@tauri-apps/api/event';
 import { useVirtualizer } from '@tanstack/react-virtual';
 
@@ -148,15 +148,24 @@ export default function ProcessScanner({ selectedPid, onSelect, onScan, selected
   const [menuState, setMenuState] = useState({ visible: false, x: 0, y: 0, process: null });
   const [sortConfig, setSortConfig] = useState({ key: 'cpu', direction: 'desc' });
   const [history, setHistory] = useState({ cpu: [], memory: [] });
-  const [scanning, setScanning] = useState(true);
+
+  // Pause State
+  const [isPaused, setIsPaused] = useState(false);
+  const pausedRef = useRef(isPaused);
+
+  // Sync ref with state to avoid stale closure
+  useEffect(() => {
+    pausedRef.current = isPaused;
+  }, [isPaused]);
 
   // Setup Event Listener
   useEffect(() => {
     let unlisten;
     async function setupListener() {
       unlisten = await listen('process-update', (event) => {
-        setProcesses(event.payload);
-        setScanning(false);
+        if (!pausedRef.current) {
+          setProcesses(event.payload);
+        }
       });
     }
     setupListener();
@@ -167,7 +176,7 @@ export default function ProcessScanner({ selectedPid, onSelect, onScan, selected
 
   // Update Graphs
   useEffect(() => {
-    if (processes.length === 0) return;
+    if (processes.length === 0 || isPaused) return;
     const totalCpu = processes.reduce((acc, p) => acc + (p.cpu_usage || 0), 0) / (navigator.hardwareConcurrency || 16);
     const totalMem = processes.reduce((acc, p) => acc + (p.memory_usage || 0), 0);
 
@@ -178,7 +187,7 @@ export default function ProcessScanner({ selectedPid, onSelect, onScan, selected
       const newMem = [...prev.memory, memPercent].slice(-maxLen);
       return { cpu: newCpu, memory: newMem };
     });
-  }, [processes]);
+  }, [processes, isPaused]);
 
   // Sort & Filter
   const sortedProcesses = useMemo(() => {
@@ -279,13 +288,19 @@ export default function ProcessScanner({ selectedPid, onSelect, onScan, selected
           <div className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Processes</div>
           <span className="text-xl font-mono text-slate-600">{processes.length}</span>
         </div>
-        {/* Search */}
-        <div className="flex items-center">
+        {/* Search & Control */}
+        <div className="flex items-center gap-2">
           <div className="relative w-full">
             <Search size={14} className="absolute left-2 top-1/2 -translate-y-1/2 text-slate-400" />
             <input type="text" value={searchTerm} onChange={e => setSearchTerm(e.target.value)} placeholder="Search..." className="w-full pl-8 pr-2 py-1.5 bg-slate-100 rounded-lg text-xs outline-none focus:ring-1 focus:ring-violet-500" />
           </div>
-          {scanning && <RefreshCw size={14} className="ml-2 animate-spin text-slate-400" />}
+          <button
+            onClick={() => setIsPaused(!isPaused)}
+            className={`p-1.5 rounded-lg transition-colors ${isPaused ? 'bg-orange-100 text-orange-600 hover:bg-orange-200' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'}`}
+            title={isPaused ? "Resume Updates" : "Pause Updates"}
+          >
+            {isPaused ? <Play size={14} fill="currentColor" /> : <Pause size={14} fill="currentColor" />}
+          </button>
         </div>
       </div>
 
