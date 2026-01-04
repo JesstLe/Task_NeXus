@@ -499,17 +499,26 @@ pub fn get_foreground_window_pid() -> Option<u32> {
 pub async fn set_process_affinity(pid: u32, affinity_mask: String) -> AppResult<()> {
     tokio::task::spawn_blocking(move || -> AppResult<()> {
         let mask = u64::from_str_radix(&affinity_mask, 16)
-            .map_err(|_| AppError::SystemError("Invalid mask format".to_string()))?
+            .map_err(|e| AppError::SystemError(format!("无效的掩码格式 '{}': {}", affinity_mask, e)))?
             as usize;
 
         unsafe {
             let handle = OpenProcess(PROCESS_SET_INFORMATION, false, pid)
-                .map_err(|_e| AppError::ProcessNotFound(pid))?;
+                .map_err(|e| {
+                    tracing::error!("无法打开进程 {} 进行亲和性设置: {}", pid, e);
+                    AppError::ProcessNotFound(pid)
+                })?;
 
             let res = SetProcessAffinityMask(handle, mask);
             let _ = CloseHandle(handle);
 
-            res.map_err(|e| AppError::SystemError(format!("SetProcessAffinityMask failed: {}", e)))
+            if let Err(e) = res {
+                tracing::error!("对 PID {} 设置亲和性掩码 {:#x} 失败: {}", pid, mask, e);
+                return Err(AppError::SystemError(format!("设置亲和性失败: {}", e)));
+            }
+            
+            tracing::info!("已成功对 PID {} 设置亲和性掩码: {:#x}", pid, mask);
+            Ok(())
         }
     })
     .await

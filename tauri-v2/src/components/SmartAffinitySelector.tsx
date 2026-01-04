@@ -30,6 +30,7 @@ interface SmartAffinitySelectorProps {
 
 export default function SmartAffinitySelector({ topology = [], currentAffinity = "All", onApply, onClose }: SmartAffinitySelectorProps) {
     const [hexMask, setHexMask] = useState("");
+    const [loading, setLoading] = useState(false);
     const [affinityMode, setAffinityMode] = useState<'hard' | 'soft'>('hard');
     const coreCount = topology.length || navigator.hardwareConcurrency || 16;
 
@@ -83,7 +84,7 @@ export default function SmartAffinitySelector({ topology = [], currentAffinity =
                             <p className="text-[11px] text-slate-400 mt-1 max-w-[300px] leading-relaxed">
                                 {affinityMode === 'hard'
                                     ? "强制绑定 (Affinity Mask): 严格限制进程在选定核心运行，适用于独占场景。"
-                                    : "柔性绑定 (CPU Sets): 优选选定核心，调度器更灵活，减少潜在的微卡顿风险。"}
+                                    : "柔性绑定 (CPU Sets): 优先选定核心，调度器更灵活，减少潜在的微卡顿风险。"}
                             </p>
                         </div>
                     </div>
@@ -130,8 +131,22 @@ export default function SmartAffinitySelector({ topology = [], currentAffinity =
                         <input type="text" value={hexMask} onChange={handleHexChange} className="w-32 text-sm font-mono outline-none uppercase text-slate-700" />
                     </div>
                     <div className="flex gap-3">
-                        <button onClick={onClose} className="px-4 py-2 text-sm text-slate-600">取消</button>
-                        <button onClick={() => onApply(selectedMask.toString(), affinityMode, topology.filter(c => isSelected(c.id)).map(c => c.id))} className={`px-6 py-2 text-sm font-bold text-white rounded-lg shadow-lg ${affinityMode === 'hard' ? 'bg-violet-600' : 'bg-blue-600'}`}>应用</button>
+                        <button onClick={onClose} disabled={loading} className="px-4 py-2 text-sm text-slate-600 disabled:opacity-50">取消</button>
+                        <button
+                            disabled={loading || selectedMask === 0n}
+                            onClick={async () => {
+                                setLoading(true);
+                                try {
+                                    await onApply(selectedMask.toString(16), affinityMode, topology.filter(c => isSelected(c.id)).map(c => c.id));
+                                } finally {
+                                    setLoading(false);
+                                }
+                            }}
+                            className={`px-6 py-2 text-sm font-bold text-white rounded-lg shadow-lg flex items-center gap-2 transition-all ${loading || selectedMask === 0n ? 'bg-slate-400' : (affinityMode === 'hard' ? 'bg-violet-600 hover:bg-violet-700' : 'bg-blue-600 hover:bg-blue-700')}`}
+                        >
+                            {loading ? <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" /> : null}
+                            <span>应用</span>
+                        </button>
                     </div>
                 </div>
             </div>

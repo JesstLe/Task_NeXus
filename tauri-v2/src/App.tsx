@@ -344,6 +344,7 @@ function App() {
                                 scanning={scanning}
                                 selectedPids={selectedPids}
                                 setSelectedPids={setSelectedPids}
+                                showToast={showToast}
                             />
                             <CoreGrid
                                 cores={cores}

@@ -9,6 +9,7 @@ import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import SmartAffinitySelector, { TopologyCore } from './SmartAffinitySelector';
+import Toast from './Toast';
 import { ProcessInfo } from '../types';
 
 const PRIORITY_MAP_CN: Record<string, string> = {
@@ -217,6 +218,7 @@ interface ProcessScannerProps {
     scanning: boolean;
     selectedPids: Set<number>;
     setSelectedPids: (pids: Set<number>) => void;
+    showToast: (msg: string, type?: any) => void;
 }
 
 export default function ProcessScanner({
@@ -225,7 +227,8 @@ export default function ProcessScanner({
     onSelect,
     onScan,
     selectedPids,
-    setSelectedPids
+    setSelectedPids,
+    showToast
 }: ProcessScannerProps) {
     const [processes, setProcesses] = useState<any[]>(initialProcesses);
     const [searchTerm, setSearchTerm] = useState('');
@@ -406,23 +409,49 @@ export default function ProcessScanner({
             return;
         }
         try {
-            await invoke(command, args);
+            const res = await invoke<any>(command, args);
             if (command === 'terminate_process') {
                 setProcesses(prev => prev.filter(p => p.pid !== args.pid));
                 const nextSet = new Set(selectedPids);
                 nextSet.delete(args.pid);
                 setSelectedPids(nextSet);
+                showToast('进程已结束', 'success');
+            } else {
+                showToast('操作成功', 'success');
             }
-        } catch (e) { console.error(e); }
+        } catch (e) {
+            console.error(e);
+            showToast(`操作失败: ${e}`, 'error');
+        }
     };
 
     const handleAffinityApply = async (maskString: string, mode: 'hard' | 'soft' = 'hard', coreIds: number[] = []) => {
         if (!affinityModal.process) return;
         try {
-            if (mode === 'soft') await invoke('set_process_cpu_sets', { pid: affinityModal.process.pid, coreIds });
-            else await invoke('set_process_affinity', { pid: affinityModal.process.pid, affinityMask: maskString });
+            if (mode === 'soft') {
+                await invoke('set_process_cpu_sets', { pid: affinityModal.process.pid, coreIds });
+            } else {
+                await invoke('set_process_affinity', { pid: affinityModal.process.pid, affinityMask: maskString });
+            }
+
+            // Immediate local feedback: update the process in the list if possible
+            const updatedAffinity = mode === 'soft' ? `Sets: ${coreIds.length}` : `0x${maskString}`;
+            setProcesses(prev => prev.map(p =>
+                p.pid === affinityModal.process.pid
+                    ? { ...p, cpu_affinity: updatedAffinity }
+                    : p
+            ));
+
+            showToast('亲和性设置已成功应用', 'success');
             setAffinityModal({ visible: false, process: null });
-        } catch (e) { console.error(e); }
+
+            // Trigger a re-scan to sync with backend truth
+            setTimeout(() => onScan(), 500);
+        } catch (e) {
+            console.error('Affinity Apply Error:', e);
+            showToast(`设置失败: ${e}`, 'error');
+            throw e; // Re-throw to inform the modal loading state
+        }
     };
 
     const toggleSelect = (pid: number) => {
