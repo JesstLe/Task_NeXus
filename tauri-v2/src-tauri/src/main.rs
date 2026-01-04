@@ -160,7 +160,9 @@ async fn set_thread_affinity(tid: u32, core_mask: u64) -> Result<bool, String> {
 /// 自动绑定最重线程到指定核心
 #[tauri::command]
 async fn bind_heaviest_thread(pid: u32, target_core: u32) -> Result<u32, String> {
-    thread::bind_heaviest_thread(pid, target_core).map_err(|e: AppError| e.to_string())
+    thread::smart_bind_thread(pid, target_core)
+        .await
+        .map_err(|e: AppError| e.to_string())
 }
 
 // ============================================================================
@@ -223,6 +225,14 @@ async fn import_power_plan(path: String) -> Result<serde_json::Value, String> {
 #[tauri::command]
 async fn open_power_settings() -> Result<bool, String> {
     power::open_power_settings()
+        .map_err(|e: AppError| e.to_string())
+}
+
+/// 删除电源计划
+#[tauri::command]
+async fn delete_power_plan(guid: String) -> Result<serde_json::Value, String> {
+    power::delete_power_plan(guid)
+        .await
         .map_err(|e: AppError| e.to_string())
 }
 
@@ -374,14 +384,19 @@ async fn get_machine_code() -> Result<String, String> {
 /// 激活软件
 #[tauri::command]
 async fn activate_license(key: String) -> Result<bool, String> {
-    if task_nexus_lib::security::verify_license(&key) {
-        config::set_config_value("license", serde_json::Value::String(key))
-            .await
-            .map(|_| true)
-            .map_err(|e| e.to_string())
-    } else {
-        Err("激活码无效，请检查后重试".to_string())
-    }
+    config::set_config_value("license", serde_json::Value::String(key.clone()))
+        .await
+        .map_err(|e| e.to_string())?;
+    
+    let is_valid = task_nexus_lib::security::verify_license(&key);
+    Ok(is_valid)
+}
+
+#[tauri::command]
+async fn save_full_config(config: task_nexus_lib::AppConfig) -> Result<(), String> {
+    config::update_full_config(config)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 /// 获取许可证状态
@@ -466,6 +481,7 @@ pub fn run() {
             list_power_plans,
             import_power_plan,
             open_power_settings,
+            delete_power_plan,
             // 系统优化
             get_tweaks,
             apply_tweaks,
@@ -489,6 +505,7 @@ pub fn run() {
             get_machine_code,
             activate_license,
             get_license_status,
+            save_full_config,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

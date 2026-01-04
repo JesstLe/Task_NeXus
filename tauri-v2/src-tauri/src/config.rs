@@ -250,9 +250,8 @@ pub fn export_config_to_path(path: PathBuf) -> AppResult<()> {
     let config = CONFIG.get().ok_or(AppError::ConfigError("Config not initialized".to_string()))?;
     let json = serde_json::to_string_pretty(&*config.read())?;
     
-    // 导出时同样进行硬件绑定加密，即使离线也不怕被读取
-    let encrypted = crate::security::encrypt_data(&json)?;
-    std::fs::write(path, encrypted)?;
+    // 导出明文 JSON 以便用户备份和迁移 (Import 兼容明文和密文)
+    std::fs::write(path, json)?;
     Ok(())
 }
 
@@ -280,6 +279,19 @@ pub fn import_config_from_path(path: PathBuf) -> AppResult<()> {
     *config.write() = new_config;
     
     // Save to default location (will automatically be encrypted)
+    save_config()?;
+    
+    Ok(())
+}
+
+/// 更新完整配置 (用于自定义编辑器)
+pub async fn update_full_config(new_config: AppConfig) -> AppResult<()> {
+    let config = CONFIG.get().ok_or(AppError::ConfigError("Config not initialized".to_string()))?;
+    
+    // 覆盖全局配置
+    *config.write() = new_config;
+    
+    // 保存并在后台应用更改 (如 SmartTrim 等)
     save_config()?;
     
     Ok(())

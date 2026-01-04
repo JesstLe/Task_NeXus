@@ -50,6 +50,7 @@ export function PowerPlanControl() {
         try {
             await invoke('set_power_plan', { plan: guid });
             setCurrentPlanGuid(guid);
+            await fetchPlans(); // 刷新以获取最新的 active 状态
         } catch (e) {
             console.error(e);
             alert('切换电源计划失败: ' + (e as string));
@@ -66,14 +67,38 @@ export function PowerPlanControl() {
         }
     };
 
+    const handleDelete = async (guid: string, name: string) => {
+        // 防止删除当前正在使用的计划
+        if (guid === currentPlanGuid) {
+            alert('无法删除正在使用的电源计划');
+            return;
+        }
+
+        if (confirm(`确定要删除电源计划 "${name}" 吗？`)) {
+            try {
+                const res = await invoke<any>('delete_power_plan', { guid });
+                if (res.success) {
+                    fetchPlans();
+                }
+            } catch (e) {
+                console.error(e);
+                alert('删除失败: ' + (e as string));
+            }
+        }
+    };
+
     return (
         <div className="flex items-center gap-2 flex-wrap justify-end max-w-[300px]">
             {plans.map(p => (
                 <button
                     key={p.guid}
                     onClick={() => switchPlan(p.guid)}
+                    onContextMenu={(e) => {
+                        e.preventDefault();
+                        handleDelete(p.guid, p.name);
+                    }}
                     disabled={loading}
-                    title={p.guid}
+                    title={p.guid + " (右键删除)"}
                     className={`px-2.5 py-1 text-xs rounded-lg transition-all truncate max-w-[100px] ${currentPlanGuid === p.guid || p.active
                         ? 'bg-violet-500 text-white'
                         : 'bg-slate-100 text-slate-600 hover:bg-slate-200'

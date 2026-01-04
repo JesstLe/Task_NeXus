@@ -222,3 +222,43 @@ fn extract_guid(s: &str) -> Option<String> {
 fn is_guid(s: &str) -> bool {
     extract_guid(s).is_some()
 }
+/// 删除电源计划
+#[cfg(windows)]
+pub async fn delete_power_plan(guid: String) -> AppResult<serde_json::Value> {
+    use std::process::Command;
+
+    tokio::task::spawn_blocking(move || {
+        // 安全检查：防止删除核心系统计划
+        if POWER_PLANS
+            .iter()
+            .any(|(_, g)| g.eq_ignore_ascii_case(&guid))
+        {
+            return Err(AppError::SystemError(
+                "禁止删除核心系统电源计划".to_string(),
+            ));
+        }
+
+        let output = Command::new("powercfg")
+            .args(["/delete", &guid])
+            .output()
+            .map_err(|e| AppError::SystemError(e.to_string()))?;
+
+        if output.status.success() {
+            tracing::info!("Power plan deleted: {}", guid);
+            Ok(serde_json::json!({
+                "success": true,
+                "guid": guid
+            }))
+        } else {
+            let stderr = crate::decode_output(&output.stderr);
+            Err(AppError::SystemError(stderr.to_string()))
+        }
+    })
+    .await
+    .map_err(|e| AppError::SystemError(e.to_string()))?
+}
+
+#[cfg(not(windows))]
+pub async fn delete_power_plan(_guid: String) -> AppResult<serde_json::Value> {
+    Err(AppError::SystemError("仅支持 Windows".to_string()))
+}

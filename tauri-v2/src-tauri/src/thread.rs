@@ -179,31 +179,90 @@ pub fn set_thread_affinity(tid: u32, core_mask: u64) -> AppResult<()> {
     }
 }
 
-/// 自动绑定进程中最重的线程到指定核心
+/// 使用双采样差分法，智能识别并绑定最重线程
 #[cfg(windows)]
-pub fn bind_heaviest_thread(pid: u32, target_core: u32) -> AppResult<u32> {
-    let threads = get_process_threads(pid)?;
+pub async fn smart_bind_thread(pid: u32, target_core: u32) -> AppResult<u32> {
+    use std::time::Duration;
 
-    // 找到最重线程
-    let heaviest = threads
-        .iter()
-        .find(|t| t.is_heaviest)
-        .ok_or_else(|| AppError::SystemError("未找到活跃线程".into()))?;
+    tokio::task::spawn_blocking(move || {
+        unsafe {
+            // 第一次采样
+            let mut threads_first = HashMap::new();
+            let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0)
+                .map_err(|e| AppError::SystemError(format!("创建线程快照失败: {}", e)))?;
 
-    // 计算核心掩码 (单核心)
-    let core_mask = 1u64 << target_core;
+            let mut entry = THREADENTRY32 {
+                dwSize: std::mem::size_of::<THREADENTRY32>() as u32,
+                ..Default::default()
+            };
 
-    // 绑定线程
-    set_thread_affinity(heaviest.tid, core_mask)?;
+            if Thread32First(snapshot, &mut entry).is_ok() {
+                loop {
+                    if entry.th32OwnerProcessID == pid {
+                         if let Ok(time) = get_thread_cpu_time(entry.th32ThreadID) {
+                             threads_first.insert(entry.th32ThreadID, time);
+                         }
+                    }
+                    entry.dwSize = std::mem::size_of::<THREADENTRY32>() as u32;
+                    if Thread32Next(snapshot, &mut entry).is_err() { break; }
+                }
+            }
+            let _ = CloseHandle(snapshot);
 
-    tracing::info!(
-        "帧线程绑定成功: TID:{} -> Core{} (CPU: {:.1}%)",
-        heaviest.tid,
-        target_core,
-        heaviest.cpu_usage
-    );
+            // 采样间隔
+            std::thread::sleep(Duration::from_millis(250));
 
-    Ok(heaviest.tid)
+            // 第二次采样并寻找最大差值
+            let mut max_delta = 0u64;
+            let mut heaviest_tid = 0u32;
+
+            // 重新遍历线程 (此时无需快照，直接用 ID 打开即可，但为了遍历还是用快照方便)
+            // 优化：直接遍历第一次捕获的 TID 列表？不行，线程可能新建/销毁。
+            // 为了准确，再次快照。
+             let snapshot2 = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0)
+                .map_err(|e| AppError::SystemError(format!("创建第二次快照失败: {}", e)))?;
+
+            entry.dwSize = std::mem::size_of::<THREADENTRY32>() as u32;
+             if Thread32First(snapshot2, &mut entry).is_ok() {
+                loop {
+                    if entry.th32OwnerProcessID == pid {
+                        let tid = entry.th32ThreadID;
+                        // 只有在第一次快照中也存在的线程才计算 delta
+                        if let Some(&first_time) = threads_first.get(&tid) {
+                             if let Ok(second_time) = get_thread_cpu_time(tid) {
+                                 if second_time >= first_time {
+                                     let delta = second_time - first_time;
+                                     if delta > max_delta {
+                                         max_delta = delta;
+                                         heaviest_tid = tid;
+                                     }
+                                 }
+                             }
+                        }
+                    }
+                    entry.dwSize = std::mem::size_of::<THREADENTRY32>() as u32;
+                    if Thread32Next(snapshot2, &mut entry).is_err() { break; }
+                }
+            }
+            let _ = CloseHandle(snapshot2);
+
+            // 检查是否找到有效的主线程
+            if heaviest_tid == 0 {
+                return Err(AppError::SystemError("无法确定主线程 (Delta=0)".into()));
+            }
+
+            // 绑定到指定核心
+            let core_mask = 1u64 << target_core;
+            set_thread_affinity(heaviest_tid, core_mask)?;
+
+            tracing::info!(
+                "智能线程聚类: Process {} -> MainThread {} locked to Core {} (Delta: {}ns)",
+                pid, heaviest_tid, target_core, max_delta * 100
+            );
+
+            Ok(heaviest_tid)
+        }
+    }).await.map_err(|e| AppError::SystemError(e.to_string()))?
 }
 
 #[cfg(not(windows))]
@@ -217,6 +276,6 @@ pub fn set_thread_affinity(_tid: u32, _core_mask: u64) -> AppResult<()> {
 }
 
 #[cfg(not(windows))]
-pub fn bind_heaviest_thread(_pid: u32, _target_core: u32) -> AppResult<u32> {
+pub async fn smart_bind_thread(_pid: u32, _target_core: u32) -> AppResult<u32> {
     Err(AppError::SystemError("仅支持 Windows".into()))
 }
