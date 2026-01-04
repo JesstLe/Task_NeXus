@@ -463,6 +463,25 @@ pub fn run() {
 
             Ok(())
         })
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                // 读取配置
+                let should_minimize = if let Ok(cfg) = config::get_config_sync() {
+                    cfg.close_to_tray
+                } else {
+                    false
+                };
+
+                if should_minimize {
+                    // 阻止默认关闭
+                    api.prevent_close();
+                    // 最小化窗口
+                    let _ = window.minimize();
+                    // 可选：隐藏窗口 (视需求而定，通常最小化即可，或者 hide 到托盘)
+                    // let _ = window.hide(); 
+                }
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             // CPU 信息
             get_cpu_info,

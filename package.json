@@ -1,6 +1,7 @@
 {
   "name": "task-nexus",
-  "version": "2.2.0",
+  "version": "3.0.5",
+  "description": "Task Nexus Application",
   "main": "electron/main.js",
   "scripts": {
     "dev": "vite",
@@ -9,6 +10,7 @@
     "electron:dev": "concurrently \"npm run dev\" \"wait-on tcp:5173 && electron .\"",
     "dist": "npm run build && electron-builder",
     "release": "node scripts/bump-version.js && npm run dist",
+    "release:tauri": "node scripts/bump-tauri-version.js && cd tauri-v2 && npm run tauri build",
     "release:minor": "npm version minor && npm run dist",
     "release:major": "npm version major && npm run dist"
   },

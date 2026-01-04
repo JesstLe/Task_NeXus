@@ -28,7 +28,7 @@ pub async fn get_current_power_plan() -> AppResult<serde_json::Value> {
             .args(["/getactivescheme"])
             .creation_flags(CREATE_NO_WINDOW)
             .output()
-            .map_err(|e| AppError::SystemError(e.to_string()))?;;
+            .map_err(|e| AppError::SystemError(e.to_string()))?;
 
         let stdout = crate::decode_output(&output.stdout);
 
@@ -81,7 +81,7 @@ pub async fn set_power_plan(plan: &str) -> AppResult<serde_json::Value> {
             .args(["/setactive", &guid])
             .creation_flags(CREATE_NO_WINDOW)
             .output()
-            .map_err(|e| AppError::SystemError(e.to_string()))?;;
+            .map_err(|e| AppError::SystemError(e.to_string()))?;
 
         if output.status.success() {
             tracing::info!("Power plan switched to: {}", plan);
@@ -113,7 +113,7 @@ pub async fn list_power_plans() -> AppResult<serde_json::Value> {
             .args(["/list"])
             .creation_flags(CREATE_NO_WINDOW)
             .output()
-            .map_err(|e| AppError::SystemError(e.to_string()))?;;
+            .map_err(|e| AppError::SystemError(e.to_string()))?;
 
         let stdout = crate::decode_output(&output.stdout);
         let mut plans = Vec::new();
@@ -162,7 +162,7 @@ pub async fn import_power_plan(path: String) -> AppResult<serde_json::Value> {
             .args(["-import", &path])
             .creation_flags(CREATE_NO_WINDOW)
             .output()
-            .map_err(|e| AppError::SystemError(e.to_string()))?;;
+            .map_err(|e| AppError::SystemError(e.to_string()))?;
 
         if output.status.success() {
             let stdout = crate::decode_output(&output.stdout);
@@ -252,7 +252,7 @@ pub async fn delete_power_plan(guid: String) -> AppResult<serde_json::Value> {
             .args(["/delete", &guid])
             .creation_flags(CREATE_NO_WINDOW)
             .output()
-            .map_err(|e| AppError::SystemError(e.to_string()))?;;
+            .map_err(|e| AppError::SystemError(e.to_string()))?;
 
         if output.status.success() {
             tracing::info!("Power plan deleted: {}", guid);
