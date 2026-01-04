@@ -539,9 +539,9 @@ export default function SettingsPanel({
   const availableCores = selectedCores.length > 0 ? selectedCores.sort((a, b) => a - b) : [];
 
   const modes = [
-    { id: 'dynamic', label: '默认使用', icon: Zap, desc: '系统自动接管，平衡性能与功耗' },
-    { id: 'd2', label: '笔记本狂暴', icon: Scale, desc: '深度优化温控与性能，消除积热掉帧' },
-    { id: 'd3', label: '极致狂暴', icon: Zap, desc: '卓越性能电源 + 实时优先级，隔离系统中断' },
+    { id: 'dynamic', label: 'T mode1', icon: Zap },
+    { id: 'd2', label: 'T mode2', icon: Scale, note: '笔记本可用' },
+    { id: 'd3', label: 'T mode3', icon: Zap },
   ];
 
   return (
@@ -550,7 +550,7 @@ export default function SettingsPanel({
       {/* 模式选择 */}
       <div className="glass rounded-2xl p-5 shadow-soft">
         <h4 className="font-medium text-slate-700 mb-4">调度模式</h4>
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        <div className="grid grid-cols-3 gap-3">
           {modes.map((m) => {
             const isActive = mode === m.id;
             const Icon = m.icon;
@@ -559,18 +559,20 @@ export default function SettingsPanel({
               <button
                 key={m.id}
                 onClick={() => onModeChange(m.id)}
-                className={`relative p-4 rounded-xl text-left transition-all duration-200 ${isActive
+                className={`relative p-4 rounded-xl text-center transition-all duration-200 ${isActive
                   ? 'bg-gradient-to-br from-violet-500 to-pink-500 text-white shadow-glow'
                   : 'bg-slate-50 hover:bg-slate-100 text-slate-600 border border-slate-200'
                   }`}
               >
-                <Icon size={18} className={isActive ? 'text-white' : 'text-violet-500'} />
+                <Icon size={18} className={`mx-auto ${isActive ? 'text-white' : 'text-violet-500'}`} />
                 <div className={`font-medium text-sm mt-2 ${isActive ? 'text-white' : 'text-slate-700'}`}>
                   {m.label}
                 </div>
-                <div className={`text-xs mt-0.5 ${isActive ? 'text-white/70' : 'text-slate-400'}`}>
-                  {m.desc}
-                </div>
+                {m.note && (
+                  <div className={`text-xs mt-0.5 ${isActive ? 'text-white/70' : 'text-slate-400'}`}>
+                    ({m.note})
+                  </div>
+                )}
               </button>
             );
           })}

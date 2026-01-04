@@ -228,6 +228,11 @@ function App() {
           setStatus('active');
           const statusMsg = prioritySuccess ? ` | 优先级: ${priority} ` : ' (优先级设置失败)';
           showToast(`已应用到进程 ${selectedPid}${statusMsg} `, 'success');
+
+          // Auto-trigger aggressive memory cleanup when using 'dynamic' mode (silent)
+          if (mode === 'dynamic' && window.electron?.clearMemory) {
+            window.electron.clearMemory().catch(() => { }); // Silent, no toast
+          }
         } else {
           showToast(result.error || '设置失败', 'error');
         }
