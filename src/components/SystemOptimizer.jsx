@@ -78,14 +78,14 @@ export default function SystemOptimizer() {
                                     key={tweak.id}
                                     onClick={() => toggleSelect(tweak.id)}
                                     className={`relative p-3 rounded-xl border transition-all cursor-pointer ${selectedIds.has(tweak.id)
-                                            ? 'bg-blue-50/50 border-blue-200'
-                                            : 'bg-white/50 border-slate-100 hover:border-blue-100'
+                                        ? 'bg-blue-50/50 border-blue-200'
+                                        : 'bg-white/50 border-slate-100 hover:border-blue-100'
                                         }`}
                                 >
                                     <div className="flex items-start gap-3">
                                         <div className={`mt-0.5 w-5 h-5 rounded-md border flex items-center justify-center transition-colors ${selectedIds.has(tweak.id)
-                                                ? 'bg-blue-500 border-blue-500'
-                                                : 'bg-white border-slate-300'
+                                            ? 'bg-blue-500 border-blue-500'
+                                            : 'bg-white border-slate-300'
                                             }`}>
                                             {selectedIds.has(tweak.id) && <Check size={12} className="text-white" />}
                                         </div>
@@ -95,25 +95,8 @@ export default function SystemOptimizer() {
                                                 <span className={`text-sm font-medium ${selectedIds.has(tweak.id) ? 'text-blue-700' : 'text-slate-600'}`}>
                                                     {tweak.name}
                                                 </span>
-                                                <button
-                                                    onClick={(e) => toggleExpand(tweak.id, e)}
-                                                    className="p-1 hover:bg-slate-100 rounded text-slate-400 hover:text-blue-500"
-                                                >
-                                                    <Info size={14} />
-                                                </button>
                                             </div>
-                                            <p className="text-xs text-slate-400 mt-0.5">{tweak.desc}</p>
-
-                                            {/* Expanded Details */}
-                                            {expandedId === tweak.id && (
-                                                <div className="mt-2 pt-2 border-t border-slate-100/50 text-[10px] font-mono text-slate-500 bg-slate-50 p-2 rounded">
-                                                    <div className="flex items-center gap-1 mb-1 text-slate-400">
-                                                        <Terminal size={10} />
-                                                        <span>执行命令:</span>
-                                                    </div>
-                                                    <div className="break-all">{tweak.command}</div>
-                                                </div>
-                                            )}
+                                            {/* Description and details hidden for commercial protection */}
                                         </div>
                                     </div>
                                 </div>
@@ -136,8 +119,8 @@ export default function SystemOptimizer() {
                     onClick={applyOptimization}
                     disabled={loading || selectedIds.size === 0}
                     className={`w-full py-3 rounded-xl font-medium transition-all flex items-center justify-center gap-2 ${loading || selectedIds.size === 0
-                            ? 'bg-slate-100 text-slate-400 cursor-not-allowed'
-                            : 'bg-gradient-to-r from-blue-500 to-cyan-500 text-white shadow-lg shadow-blue-500/20 hover:shadow-blue-500/30 active:scale-[0.98]'
+                        ? 'bg-slate-100 text-slate-400 cursor-not-allowed'
+                        : 'bg-gradient-to-r from-blue-500 to-cyan-500 text-white shadow-lg shadow-blue-500/20 hover:shadow-blue-500/30 active:scale-[0.98]'
                         }`}
                 >
                     {loading ? (
