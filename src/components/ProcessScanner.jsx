@@ -115,10 +115,15 @@ export default function ProcessScanner({ processes, selectedPid, onSelect, onSca
 
   // Bulk Action Handler - applies priority to all selected processes
   const handleBulkAction = async (priority) => {
-    if (selectedPids.size === 0) return;
+    console.log('[handleBulkAction] Called with priority:', priority, 'selectedPids:', Array.from(selectedPids));
+    if (selectedPids.size === 0) {
+      console.log('[handleBulkAction] No PIDs selected, returning');
+      return;
+    }
 
     try {
       const promises = Array.from(selectedPids).map(pid => {
+        console.log('[handleBulkAction] Setting priority for PID:', pid);
         if (window.electron?.setProcessPriority) {
           return window.electron.setProcessPriority(pid, priority);
         }
@@ -126,6 +131,7 @@ export default function ProcessScanner({ processes, selectedPid, onSelect, onSca
       });
 
       await Promise.all(promises);
+      console.log('[handleBulkAction] All done, clearing selection');
       setSelectedPids(new Set()); // Clear selection after action
       onScan(); // Refresh the list
     } catch (e) {
