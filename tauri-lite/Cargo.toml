@@ -12,7 +12,7 @@ egui = "0.27.2"
 # Icon Parsing
 ico = "0.3"
 
-# System Monitoring (match tauri-v2 version)
+# System Monitoring
 sysinfo = "0.31"
 
 # Async Runtime
@@ -22,19 +22,16 @@ tokio = { version = "1", features = ["full"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
-# File Paths
+# File Paths & Dialogs
 dirs = "5.0"
-
-# Native File Dialogs
 rfd = "0.14"
 
-# Windows Registry (for auto-start)
+# System Tray
+tray-icon = "0.14"
+
+# Windows-specific dependencies
 [target.'cfg(windows)'.dependencies]
 winreg = "0.55"
-
-
-# Windows API (match tauri-v2 version for compatibility)
-[target.'cfg(windows)'.dependencies]
 windows = { version = "0.58", features = [
     "Win32_Foundation",
     "Win32_Security",

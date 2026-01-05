@@ -11,4 +11,3 @@ pub mod config;
 
 pub use types::*;
 pub use config::{AppConfig, set_auto_start};
-

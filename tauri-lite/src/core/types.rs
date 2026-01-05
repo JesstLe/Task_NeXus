@@ -41,6 +41,18 @@ impl PriorityLevel {
             PriorityLevel::RealTime => "RealTime",
         }
     }
+    
+    pub fn as_str_cn(&self) -> &'static str {
+        match self {
+            PriorityLevel::Idle => "空闲",
+            PriorityLevel::BelowNormal => "低",
+            PriorityLevel::Normal => "正常",
+            PriorityLevel::AboveNormal => "较高",
+            PriorityLevel::High => "高",
+            PriorityLevel::RealTime => "实时",
+        }
+    }
+
 
     pub fn from_str(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
@@ -116,3 +128,67 @@ impl From<std::io::Error> for AppError {
 
 /// 应用结果类型
 pub type AppResult<T> = Result<T, AppError>;
+
+/// 待应用的进程策略 (尚未执行)
+#[derive(Debug, Clone, Default)]
+pub struct PendingProfile {
+    /// 核心掩码 (None = 使用当前选中的核心)
+    pub affinity_mask: Option<u64>,
+    /// 优先级 (None = 不修改)
+    pub priority: Option<PriorityLevel>,
+    /// 线程绑定目标核心 (None = 不绑定)
+    pub thread_bind_core: Option<u32>,
+}
+
+impl PendingProfile {
+    pub fn is_empty(&self) -> bool {
+        self.affinity_mask.is_none() && self.priority.is_none() && self.thread_bind_core.is_none()
+    }
+    
+    /// 生成状态摘要文本
+    pub fn summary(&self) -> String {
+        if self.is_empty() {
+            return "默认".to_string();
+        }
+        let mut parts = Vec::new();
+        if let Some(mask) = self.affinity_mask {
+            // 生成选定核心编号列表
+            let cores: Vec<u32> = (0..64).filter(|i| (mask >> i) & 1 == 1).collect();
+            if cores.len() <= 4 {
+                parts.push(format!("核心:{}", cores.iter().map(|c| c.to_string()).collect::<Vec<_>>().join(",")));
+            } else if !cores.is_empty() {
+                // 尝试检测连续范围
+                let min = *cores.first().unwrap();
+                let max = *cores.last().unwrap();
+                if max - min + 1 == cores.len() as u32 {
+                    parts.push(format!("核心:{}-{}", min, max));
+                } else {
+                    parts.push(format!("{}核", cores.len()));
+                }
+            }
+        }
+        if let Some(level) = &self.priority {
+            parts.push(format!("{}", level.as_str_cn()));
+        }
+        if let Some(core) = self.thread_bind_core {
+            parts.push(format!("绑定:{}", core));
+        }
+        parts.join(" | ")
+    }
+}
+
+impl PriorityLevel {
+    /// 获取优先级对应的颜色
+    pub fn color(&self) -> (u8, u8, u8) {
+        match self {
+            PriorityLevel::RealTime => (255, 50, 50),   // 红色
+            PriorityLevel::High => (255, 150, 50),      // 橙色
+            PriorityLevel::AboveNormal => (255, 220, 50), // 黄色
+            PriorityLevel::Normal => (150, 150, 150),   // 灰色
+            PriorityLevel::BelowNormal => (100, 180, 255), // 蓝色
+            PriorityLevel::Idle => (100, 100, 100),     // 深灰
+        }
+    }
+}
+
+

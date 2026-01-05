@@ -3,16 +3,28 @@
 mod core;
 
 use eframe::egui;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
 use sysinfo::System;
-use core::{governor, thread, topology, PriorityLevel, CpuTopology, AppConfig, set_auto_start};
+use core::{governor, thread, topology, PriorityLevel, CpuTopology, AppConfig, set_auto_start, PendingProfile, CoreType, LogicalCore};
+
+// 系统托盘相关
+use tray_icon::{TrayIconBuilder, menu::{Menu, MenuItem, PredefinedMenuItem}};
+use tray_icon::Icon;
+
+// 全局标志：是否请求显示窗口
+static SHOW_WINDOW_FLAG: AtomicBool = AtomicBool::new(false);
+static EXIT_FLAG: AtomicBool = AtomicBool::new(false);
 
 #[tokio::main]
 async fn main() -> eframe::Result<()> {
+    // 创建系统托盘
+    let _tray = create_tray_icon();
+    
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([880.0, 700.0])
-            .with_min_inner_size([650.0, 500.0])
+            .with_inner_size([950.0, 750.0])
+            .with_min_inner_size([750.0, 550.0])
             .with_icon(load_icon()),
         ..Default::default()
     };
@@ -20,20 +32,13 @@ async fn main() -> eframe::Result<()> {
         "Task NeXus Lite",
         options,
         Box::new(|cc| {
-            // 配置中文字体支持
+            // 运行时加载中文字体
             let mut fonts = egui::FontDefinitions::default();
-            fonts.font_data.insert(
-                "msyh".to_owned(),
-                egui::FontData::from_static(include_bytes!("C:\\Windows\\Fonts\\msyh.ttc")),
-            );
-            fonts.families
-                .entry(egui::FontFamily::Proportional)
-                .or_default()
-                .insert(0, "msyh".to_owned());
-            fonts.families
-                .entry(egui::FontFamily::Monospace)
-                .or_default()
-                .push("msyh".to_owned());
+            if let Some(font_data) = load_system_font() {
+                fonts.font_data.insert("cjk".to_owned(), egui::FontData::from_owned(font_data));
+                fonts.families.entry(egui::FontFamily::Proportional).or_default().insert(0, "cjk".to_owned());
+                fonts.families.entry(egui::FontFamily::Monospace).or_default().push("cjk".to_owned());
+            }
             cc.egui_ctx.set_fonts(fonts);
             
             let mut style = (*cc.egui_ctx.style()).clone();
@@ -45,21 +50,146 @@ async fn main() -> eframe::Result<()> {
     )
 }
 
+/// 创建系统托盘图标
+fn create_tray_icon() -> Option<tray_icon::TrayIcon> {
+    // 加载图标
+    let icon_bytes = include_bytes!("../icon.ico");
+    let icon = if let Ok(icon_dir) = ico::IconDir::read(std::io::Cursor::new(icon_bytes)) {
+        if let Some(entry) = icon_dir.entries().iter().max_by_key(|e| e.width()) {
+            if let Ok(image) = entry.decode() {
+                Icon::from_rgba(image.rgba_data().to_vec(), image.width(), image.height()).ok()
+            } else { None }
+        } else { None }
+    } else { None };
+    
+    // 创建托盘菜单
+    let menu = Menu::new();
+    let show_item = MenuItem::new("显示窗口", true, None);
+    let quit_item = MenuItem::new("退出程序", true, None);
+    let _ = menu.append(&show_item);
+    let _ = menu.append(&PredefinedMenuItem::separator());
+    let _ = menu.append(&quit_item);
+    
+    // 监听菜单事件
+    let show_id = show_item.id().clone();
+    let quit_id = quit_item.id().clone();
+    
+    std::thread::spawn(move || {
+        let receiver = tray_icon::menu::MenuEvent::receiver();
+        loop {
+            if let Ok(event) = receiver.recv() {
+                if event.id == show_id {
+                    SHOW_WINDOW_FLAG.store(true, Ordering::SeqCst);
+                } else if event.id == quit_id {
+                    EXIT_FLAG.store(true, Ordering::SeqCst);
+                    std::process::exit(0);
+                }
+            }
+        }
+    });
+    
+    // 监听托盘图标点击
+    std::thread::spawn(|| {
+        let receiver = tray_icon::TrayIconEvent::receiver();
+        loop {
+            if let Ok(event) = receiver.recv() {
+                if matches!(event.click_type, tray_icon::ClickType::Left | tray_icon::ClickType::Double) {
+                    SHOW_WINDOW_FLAG.store(true, Ordering::SeqCst);
+                }
+            }
+        }
+    });
+    
+    let builder = TrayIconBuilder::new()
+        .with_menu(Box::new(menu))
+        .with_tooltip("Task NeXus Lite");
+    
+    let builder = if let Some(icon) = icon {
+        builder.with_icon(icon)
+    } else {
+        builder
+    };
+    
+    builder.build().ok()
+}
+
 fn load_icon() -> egui::IconData {
     let icon_bytes = include_bytes!("../icon.ico");
     if let Ok(icon_dir) = ico::IconDir::read(std::io::Cursor::new(icon_bytes)) {
         if let Some(entry) = icon_dir.entries().iter().max_by_key(|e| e.width()) {
             if let Ok(image) = entry.decode() {
-                return egui::IconData {
-                    rgba: image.rgba_data().to_vec(),
-                    width: image.width(),
-                    height: image.height(),
-                };
+                return egui::IconData { rgba: image.rgba_data().to_vec(), width: image.width(), height: image.height() };
             }
         }
     }
     egui::IconData::default()
 }
+
+/// 运行时加载系统中文字体
+fn load_system_font() -> Option<Vec<u8>> {
+    let font_paths = [
+        "C:\\Windows\\Fonts\\msyh.ttc",
+        "C:\\Windows\\Fonts\\simhei.ttf",
+        "C:\\Windows\\Fonts\\simsun.ttc",
+        "C:\\Windows\\Fonts\\msyhbd.ttc",
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        "/System/Library/Fonts/PingFang.ttc",
+    ];
+    
+    for path in &font_paths {
+        if let Ok(data) = std::fs::read(path) {
+            return Some(data);
+        }
+    }
+    None
+}
+
+/// 默认游戏关键词列表
+fn default_game_keywords() -> Vec<String> {
+    vec![
+        // FPS 射击游戏
+        "cs2".to_string(), "csgo".to_string(), "counter-strike".to_string(),
+        "valorant".to_string(), "apex".to_string(), "apexlegends".to_string(),
+        "pubg".to_string(), "tslgame".to_string(),
+        "fortnite".to_string(), "fortniteclient".to_string(),
+        "overwatch".to_string(), "r5apex".to_string(),
+        "cod".to_string(), "callofduty".to_string(),
+        "rainbow".to_string(), "rainbowsix".to_string(),
+        
+        // MOBA 游戏
+        "league".to_string(), "lol".to_string(), "leagueclient".to_string(),
+        "dota".to_string(), "dota2".to_string(),
+        "honorofkings".to_string(),
+        
+        // 动作/格斗游戏
+        "naraka".to_string(), "narakabladepoint".to_string(),
+        "streetfighter".to_string(),
+        "tekken".to_string(),
+        
+        // 开放世界/RPG
+        "genshinimpact".to_string(), "yuanshen".to_string(),
+        "gta".to_string(), "gtav".to_string(),
+        "eldenring".to_string(),
+        "cyberpunk".to_string(),
+        "starfield".to_string(),
+        "diablo".to_string(),
+        "pathofexile".to_string(), "poe".to_string(),
+        "lostark".to_string(),
+        
+        // 竞速游戏
+        "forza".to_string(),
+        "assettocorsa".to_string(),
+        
+        // 生存/沙盒
+        "minecraft".to_string(),
+        "rust".to_string(),
+        "ark".to_string(),
+        
+        // 通用关键词
+        "game".to_string(),
+    ]
+}
+
 
 struct TNLiteApp {
     sys: System,
@@ -70,8 +200,14 @@ struct TNLiteApp {
     topology: Option<CpuTopology>,
     config: AppConfig,
     status_msg: String,
+    pending_profiles: HashMap<u32, PendingProfile>,
+    minimize_to_tray: bool,
+    game_keywords: Vec<String>,
+    cpu_count: usize,
+    is_hidden: bool,
 }
 
+#[derive(Clone)]
 struct LiteProcess {
     pid: u32,
     name: String,
@@ -97,6 +233,11 @@ impl TNLiteApp {
             topology,
             config,
             status_msg: String::new(),
+            pending_profiles: HashMap::new(),
+            minimize_to_tray: true,
+            game_keywords: default_game_keywords(),
+            cpu_count: core_count,
+            is_hidden: false,
         }
     }
 
@@ -121,10 +262,61 @@ impl TNLiteApp {
         new_procs.sort_by(|a, b| b.cpu.partial_cmp(&a.cpu).unwrap_or(std::cmp::Ordering::Equal));
         self.processes = new_procs;
     }
+    
+    fn get_core_type_color(core_type: &CoreType) -> egui::Color32 {
+        match core_type {
+            CoreType::VCache => egui::Color32::from_rgb(255, 100, 100),
+            CoreType::Performance => egui::Color32::from_rgb(100, 200, 255),
+            CoreType::Efficiency => egui::Color32::from_rgb(100, 255, 100),
+            CoreType::Unknown => egui::Color32::WHITE,
+        }
+    }
+    
+    fn get_core_type_char(core_type: &CoreType) -> &'static str {
+        match core_type {
+            CoreType::VCache => "V",
+            CoreType::Performance => "P",
+            CoreType::Efficiency => "E",
+            CoreType::Unknown => "",
+        }
+    }
+    
+    fn get_grouped_cores(&self) -> (Vec<LogicalCore>, Vec<LogicalCore>) {
+        let mut physical_cores = Vec::new();
+        let mut smt_cores = Vec::new();
+        
+        if let Some(top) = &self.topology {
+            let mut seen_physical: HashSet<usize> = HashSet::new();
+            
+            for core in &top.cores {
+                if !seen_physical.contains(&core.physical_id) {
+                    physical_cores.push(core.clone());
+                    seen_physical.insert(core.physical_id);
+                } else {
+                    smt_cores.push(core.clone());
+                }
+            }
+        }
+        
+        (physical_cores, smt_cores)
+    }
 }
 
 impl eframe::App for TNLiteApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // 检查是否需要显示窗口（从托盘恢复）
+        if SHOW_WINDOW_FLAG.swap(false, Ordering::SeqCst) {
+            self.is_hidden = false;
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+            ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+            ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+        }
+        
+        // 检查是否需要退出
+        if EXIT_FLAG.load(Ordering::SeqCst) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
+        
         if self.last_refresh.elapsed() >= std::time::Duration::from_millis(1000) {
             self.refresh_data();
             self.last_refresh = std::time::Instant::now();
@@ -141,34 +333,70 @@ impl eframe::App for TNLiteApp {
 
             ui.add_space(6.0);
 
-            // 核心选择网格 (无热力图)
+            // 核心选择 - 分组显示
             ui.group(|ui| {
                 ui.horizontal(|ui| {
                     ui.strong("核心选择");
+                    ui.add_space(20.0);
+                    ui.label(egui::RichText::new("V").color(egui::Color32::from_rgb(255, 100, 100)));
+                    ui.label("V-Cache");
+                    ui.label(egui::RichText::new("P").color(egui::Color32::from_rgb(100, 200, 255)));
+                    ui.label("性能核");
+                    ui.label(egui::RichText::new("E").color(egui::Color32::from_rgb(100, 255, 100)));
+                    ui.label("效率核");
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui.button("全选").clicked() { 
-                            let count = self.topology.as_ref().map(|t| t.logical_cores as usize).unwrap_or(16);
+                            let count = self.cpu_count;
                             self.selected_cores = (0..count).collect(); 
                         }
                         if ui.button("清空").clicked() { self.selected_cores.clear(); }
                     });
                 });
-                ui.add_space(4.0);
-                let core_count = self.topology.as_ref().map(|t| t.logical_cores as usize).unwrap_or(16);
-                let cols = (ui.available_width() / 50.0).floor() as usize;
-                let cols = if cols == 0 { 1 } else { cols };
-                egui::Grid::new("core_grid").spacing([4.0, 4.0]).show(ui, |ui| {
-                    for i in 0..core_count {
-                        let is_selected = self.selected_cores.contains(&i);
-                        let color = if is_selected { egui::Color32::from_rgb(147, 51, 234) } else { egui::Color32::from_gray(60) };
-                        let button = egui::Button::new(egui::RichText::new(format!("{}", i)).color(egui::Color32::WHITE))
-                            .fill(color).min_size(egui::vec2(42.0, 42.0)).rounding(4.0);
+                
+                ui.add_space(6.0);
+                
+                let (physical_cores, smt_cores) = self.get_grouped_cores();
+                
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("物理核心").strong());
+                    ui.add_space(10.0);
+                    for core in &physical_cores {
+                        let is_selected = self.selected_cores.contains(&core.id);
+                        let type_color = Self::get_core_type_color(&core.core_type);
+                        let type_char = Self::get_core_type_char(&core.core_type);
+                        let label = format!("{}{}", core.id, type_char);
+                        
+                        let bg_color = if is_selected { egui::Color32::from_rgb(147, 51, 234) } else { egui::Color32::from_gray(60) };
+                        let button = egui::Button::new(egui::RichText::new(&label).color(type_color).strong())
+                            .fill(bg_color).min_size(egui::vec2(42.0, 36.0)).rounding(4.0);
+                        
                         if ui.add(button).clicked() {
-                            if is_selected { self.selected_cores.remove(&i); } else { self.selected_cores.insert(i); }
+                            if is_selected { self.selected_cores.remove(&core.id); } else { self.selected_cores.insert(core.id); }
                         }
-                        if (i + 1) % cols == 0 { ui.end_row(); }
                     }
                 });
+                
+                if !smt_cores.is_empty() {
+                    ui.add_space(4.0);
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("SMT超线程").color(egui::Color32::GRAY));
+                        ui.add_space(10.0);
+                        for core in &smt_cores {
+                            let is_selected = self.selected_cores.contains(&core.id);
+                            let type_color = Self::get_core_type_color(&core.core_type);
+                            let type_char = Self::get_core_type_char(&core.core_type);
+                            let label = format!("{}{}", core.id, type_char);
+                            
+                            let bg_color = if is_selected { egui::Color32::from_rgb(120, 40, 180) } else { egui::Color32::from_gray(45) };
+                            let button = egui::Button::new(egui::RichText::new(&label).color(type_color))
+                                .fill(bg_color).min_size(egui::vec2(42.0, 36.0)).rounding(4.0);
+                            
+                            if ui.add(button).clicked() {
+                                if is_selected { self.selected_cores.remove(&core.id); } else { self.selected_cores.insert(core.id); }
+                            }
+                        }
+                    });
+                }
             });
 
             ui.add_space(6.0);
@@ -177,83 +405,132 @@ impl eframe::App for TNLiteApp {
             ui.group(|ui| {
                 ui.horizontal(|ui| {
                     ui.strong("进程列表");
-                    ui.add(egui::TextEdit::singleline(&mut self.search_term).hint_text("搜索...").desired_width(200.0));
+                    ui.add(egui::TextEdit::singleline(&mut self.search_term).hint_text("搜索...").desired_width(150.0));
                 });
                 ui.add_space(4.0);
                 
-                // 表头
                 ui.horizontal(|ui| {
                     ui.label(egui::RichText::new("进程名").strong());
+                    ui.add_space(100.0);
+                    ui.label(egui::RichText::new("当前状态").strong());
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.label(egui::RichText::new("操作").strong());
-                        ui.add_space(20.0);
+                        ui.add_space(30.0);
                         ui.label(egui::RichText::new("CPU").strong());
-                        ui.add_space(20.0);
+                        ui.add_space(30.0);
                         ui.label(egui::RichText::new("内存").strong());
                     });
                 });
                 ui.separator();
                 
-                egui::ScrollArea::vertical().max_height(350.0).id_source("proc_scroll").show(ui, |ui| {
-                    for proc in &self.processes {
+                egui::ScrollArea::vertical().max_height(300.0).id_source("proc_scroll").show(ui, |ui| {
+                    let processes = self.processes.clone();
+                    let topology = self.topology.clone();
+                    for proc in &processes {
                         let proc_pid = proc.pid;
                         let proc_name = proc.name.clone();
                         let selected_cores = self.selected_cores.clone();
-                        let core_count = self.topology.as_ref().map(|t| t.logical_cores as usize).unwrap_or(16);
 
                         ui.push_id(proc_pid, |ui| {
                             let response = ui.horizontal(|ui| {
-                                // 进程名 (明确显示)
-                                let is_game = proc_name.to_lowercase().contains("cs2") || proc_name.to_lowercase().contains("apex");
-                                let name_color = if is_game { egui::Color32::from_rgb(100, 255, 100) } else { egui::Color32::from_rgb(220, 220, 220) };
+                                let proc_lower = proc_name.to_lowercase();
+                                let is_game = self.game_keywords.iter().any(|kw| proc_lower.contains(kw));
+                                let name_color = if is_game { 
+                                    egui::Color32::from_rgb(0, 120, 0)
+                                } else { 
+                                    egui::Color32::from_rgb(50, 50, 50)
+                                };
                                 ui.label(egui::RichText::new(&proc_name).color(name_color).strong());
+                                
+                                ui.add_space(20.0);
+                                
+                                let profile = self.pending_profiles.get(&proc_pid);
+                                let status_text = profile.map(|p| p.summary()).unwrap_or_else(|| "默认".to_string());
+                                let status_color = if let Some(p) = profile {
+                                    if let Some(level) = &p.priority {
+                                        let (r, g, b) = level.color();
+                                        egui::Color32::from_rgb(r, g, b)
+                                    } else if !p.is_empty() {
+                                        egui::Color32::from_rgb(180, 140, 60)
+                                    } else {
+                                        egui::Color32::from_gray(100)
+                                    }
+                                } else {
+                                    egui::Color32::from_gray(100)
+                                };
+                                ui.label(egui::RichText::new(status_text).color(status_color));
                                 
                                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                     if ui.button("应用").clicked() {
+                                        let profile = self.pending_profiles.entry(proc_pid).or_default();
                                         let mut mask: u64 = 0;
                                         for &c in &selected_cores { mask |= 1 << c; }
-                                        let mask_str = format!("{:X}", mask);
+                                        profile.affinity_mask = Some(mask);
+                                        let profile_clone = profile.clone();
+                                        
                                         tokio::spawn(async move {
-                                            let _ = governor::set_process_affinity(proc_pid, mask_str).await;
+                                            if let Some(mask) = profile_clone.affinity_mask {
+                                                let _ = governor::set_process_affinity(proc_pid, format!("{:X}", mask)).await;
+                                            }
+                                            if let Some(level) = profile_clone.priority {
+                                                let _ = governor::set_priority(proc_pid, level).await;
+                                            }
+                                            if let Some(core) = profile_clone.thread_bind_core {
+                                                let _ = thread::smart_bind_thread(proc_pid, core).await;
+                                            }
                                         });
+                                        
+                                        self.status_msg = format!("已应用策略到 {}", proc_name);
                                     }
-                                    ui.add_space(10.0);
+                                    
+                                    ui.add_space(8.0);
                                     ui.label(format!("{:.1}%", proc.cpu));
-                                    ui.add_space(10.0);
+                                    ui.add_space(8.0);
                                     ui.label(format!("{} MB", proc.mem));
                                 });
                             }).response;
 
                             response.context_menu(|ui| {
-                                ui.label(egui::RichText::new(format!("{}", proc_name)).strong());
+                                ui.label(egui::RichText::new(&proc_name).strong());
                                 ui.separator();
+                                
                                 ui.menu_button("优先级", |ui| {
-                                    for (label, p_str) in [("实时", "RealTime"), ("高", "High"), ("高于正常", "AboveNormal"), ("正常", "Normal"), ("低于正常", "BelowNormal"), ("空闲", "Idle")] {
-                                        if ui.button(label).clicked() { 
-                                            if let Some(level) = PriorityLevel::from_str(p_str) {
-                                                tokio::spawn(async move {
-                                                    let _ = governor::set_priority(proc_pid, level).await;
-                                                });
+                                    for (label, p_str) in [("实时", "RealTime"), ("高", "High"), ("较高", "AboveNormal"), ("正常", "Normal"), ("低", "BelowNormal"), ("空闲", "Idle")] {
+                                        if let Some(level) = PriorityLevel::from_str(p_str) {
+                                            let (r, g, b) = level.color();
+                                            if ui.button(egui::RichText::new(label).color(egui::Color32::from_rgb(r, g, b))).clicked() { 
+                                                let profile = self.pending_profiles.entry(proc_pid).or_default();
+                                                profile.priority = Some(level);
+                                                self.status_msg = format!("已设置 {} 优先级: {}", proc_name, label);
+                                                ui.close_menu();
                                             }
-                                            ui.close_menu();
                                         }
                                     }
                                 });
+                                
                                 ui.menu_button("线程绑定", |ui| {
-                                    for i in 0..core_count {
-                                        if ui.button(format!("核心 {}", i)).clicked() {
-                                            tokio::spawn(async move {
-                                                let _ = thread::smart_bind_thread(proc_pid, i as u32).await;
-                                            });
-                                            ui.close_menu();
+                                    if let Some(top) = &topology {
+                                        for core in &top.cores {
+                                            let type_char = Self::get_core_type_char(&core.core_type);
+                                            if ui.button(format!("核心 {}{}", core.id, type_char)).clicked() {
+                                                let profile = self.pending_profiles.entry(proc_pid).or_default();
+                                                profile.thread_bind_core = Some(core.id as u32);
+                                                self.status_msg = format!("已设置 {} 线程绑定: 核心{}", proc_name, core.id);
+                                                ui.close_menu();
+                                            }
                                         }
                                     }
                                 });
+                                
+                                if ui.button("清除策略").clicked() {
+                                    self.pending_profiles.remove(&proc_pid);
+                                    self.status_msg = format!("已清除 {} 的策略", proc_name);
+                                    ui.close_menu();
+                                }
+                                
                                 ui.separator();
-                                if ui.button(egui::RichText::new("结束进程").color(egui::Color32::LIGHT_RED)).clicked() {
-                                    tokio::spawn(async move {
-                                        let _ = governor::kill_process(proc_pid).await;
-                                    });
+                                if ui.button(egui::RichText::new("结束进程").color(egui::Color32::from_rgb(255, 100, 100))).clicked() {
+                                    tokio::spawn(async move { let _ = governor::kill_process(proc_pid).await; });
                                     ui.close_menu();
                                 }
                             });
@@ -267,64 +544,42 @@ impl eframe::App for TNLiteApp {
             ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
                 ui.add_space(5.0);
                 ui.horizontal(|ui| {
-                    // 开机自启动
                     let mut auto_start = self.config.auto_start;
                     if ui.checkbox(&mut auto_start, "开机自启动").changed() {
                         self.config.auto_start = auto_start;
-                        if set_auto_start(auto_start).is_ok() {
-                            let _ = self.config.save();
-                            self.status_msg = if auto_start { "已启用开机自启动".to_string() } else { "已禁用开机自启动".to_string() };
-                        }
+                        if set_auto_start(auto_start).is_ok() { let _ = self.config.save(); }
                     }
                     
+                    ui.checkbox(&mut self.minimize_to_tray, "关闭时最小化到托盘");
                     ui.separator();
                     
-                    if ui.button("保存配置").clicked() {
-                        if self.config.save().is_ok() {
-                            self.status_msg = "配置已保存".to_string();
+                    if ui.button("保存").clicked() { if self.config.save().is_ok() { self.status_msg = "配置已保存".to_string(); } }
+                    if ui.button("导出").clicked() {
+                        if let Some(path) = rfd::FileDialog::new().add_filter("JSON", &["json"]).set_file_name("tn_lite_config.json").save_file() {
+                            if self.config.export_to(&path).is_ok() { self.status_msg = format!("已导出: {}", path.display()); }
                         }
                     }
-                    
-                    if ui.button("导出配置").clicked() {
-                        if let Some(path) = rfd::FileDialog::new()
-                            .add_filter("JSON", &["json"])
-                            .set_file_name("tn_lite_config.json")
-                            .save_file() 
-                        {
-                            if self.config.export_to(&path).is_ok() {
-                                self.status_msg = format!("已导出到: {}", path.display());
-                            }
+                    if ui.button("导入").clicked() {
+                        if let Some(path) = rfd::FileDialog::new().add_filter("JSON", &["json"]).pick_file() {
+                            if let Ok(cfg) = AppConfig::import_from(&path) { self.config = cfg; let _ = self.config.save(); self.status_msg = "配置已导入".to_string(); }
                         }
                     }
-                    
-                    if ui.button("导入配置").clicked() {
-                        if let Some(path) = rfd::FileDialog::new()
-                            .add_filter("JSON", &["json"])
-                            .pick_file() 
-                        {
-                            if let Ok(config) = AppConfig::import_from(&path) {
-                                self.config = config;
-                                let _ = self.config.save();
-                                self.status_msg = "配置已导入".to_string();
-                            }
-                        }
-                    }
-                    
                     ui.separator();
-                    
-                    if ui.button("清理内存").clicked() {
-                        tokio::spawn(async move {
-                            let _ = governor::clear_system_memory().await;
-                        });
-                        self.status_msg = "内存清理已触发".to_string();
-                    }
+                    if ui.button("清理内存").clicked() { tokio::spawn(async { let _ = governor::clear_system_memory().await; }); self.status_msg = "内存清理已触发".to_string(); }
                 });
                 
-                if !self.status_msg.is_empty() {
-                    ui.label(egui::RichText::new(&self.status_msg).weak());
-                }
+                if !self.status_msg.is_empty() { ui.label(egui::RichText::new(&self.status_msg).weak()); }
             });
         });
+        
+        // 处理关闭事件 - 最小化到托盘
+        if ctx.input(|i| i.viewport().close_requested()) && self.minimize_to_tray {
+            self.is_hidden = true;
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+            self.status_msg = "已最小化到托盘".to_string();
+        }
+        
         ctx.request_repaint_after(std::time::Duration::from_millis(200));
     }
 }
