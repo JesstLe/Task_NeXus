@@ -250,49 +250,14 @@ pub async fn get_memory_info() -> AppResult<MemoryInfo> {
 // CPU 监控
 // ============================================================================
 
-/// 启动 CPU 核心监控
-pub async fn start_cpu_monitor(app: tauri::AppHandle) {
-    use tauri::Emitter; // Removed Runtime
-    if CPU_MONITOR_RUNNING.swap(true, Ordering::SeqCst) {
-        return; // 已经在运行
-    }
-
-    tracing::info!("Starting CPU monitor");
-
-    tokio::spawn(async move {
-        use sysinfo::System;
-
-        let mut sys = System::new();
-
-        while CPU_MONITOR_RUNNING.load(Ordering::SeqCst) {
-            sys.refresh_cpu_all();
-            sys.refresh_memory();
-
-            let loads: Vec<f32> = sys.cpus().iter().map(|c| c.cpu_usage()).collect();
-            
-            // System Memory Load
-            let total_mem = sys.total_memory();
-            let used_mem = total_mem.saturating_sub(sys.available_memory());
-            let mem_percent = if total_mem > 0 {
-                (used_mem as f64 / total_mem as f64 * 100.0) as f32
-            } else {
-                0.0
-            };
-
-            // 发送到前端
-            let _ = app.emit("cpu-load-update", &loads);
-            let _ = app.emit("memory-load-update", mem_percent);
-
-            tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-        }
-
-        tracing::info!("CPU monitor stopped");
-    });
+/// 启动 CPU 核心监控 (Deprecated: Merged into ProcessMonitor)
+pub async fn start_cpu_monitor(_app: tauri::AppHandle) {
+    tracing::info!("CPU monitor requested (Legacy ignored: Integrated into ProcessMonitor)");
 }
 
-/// 停止 CPU 监控
+/// 停止 CPU 监控 (Deprecated)
 pub async fn stop_cpu_monitor() {
-    CPU_MONITOR_RUNNING.store(false, Ordering::SeqCst);
+    // No-op
 }
 
 // ============================================================================

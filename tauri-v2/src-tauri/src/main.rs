@@ -631,11 +631,7 @@ pub fn run() {
             // Start Monitor
             monitor_clone.start(app.handle().clone());
             
-            // Start HW Monitor (CPU/Mem/Gears)
-            let app_handle = app.handle().clone();
-            tauri::async_runtime::spawn(async move {
-                hardware::start_cpu_monitor(app_handle).await;
-            });
+            // Hardware Monitor is now integrated into monitor_clone
 
             // 确保窗口在初始化后可见
             if let Some(w) = app.get_webview_window("main") {

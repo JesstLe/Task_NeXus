@@ -61,6 +61,26 @@ impl ProcessMonitor {
                 // 2. Refresh Processes (CPU/Mem always refresh)
                 sys.refresh_processes(sysinfo::ProcessesToUpdate::All);
                 
+                // OPTIMIZATION Phase 2: Consolidated Hardware Monitoring
+                // Refresh Global CPU & Memory here to avoid a second thread
+                sys.refresh_cpu_all();
+                sys.refresh_memory();
+
+                // 2.1 Emit Global CPU Loads
+                let cpu_loads: Vec<f32> = sys.cpus().iter().map(|c| c.cpu_usage()).collect();
+                let _ = app_handle.emit("cpu-load-update", &cpu_loads);
+
+                // 2.2 Emit Global Memory Load
+                let total_mem = sys.total_memory();
+                let used_mem = total_mem.saturating_sub(sys.available_memory());
+                let mem_percent = if total_mem > 0 {
+                    (used_mem as f64 / total_mem as f64 * 100.0) as f32
+                } else {
+                    0.0
+                };
+                let _ = app_handle.emit("memory-load-update", mem_percent);
+
+                
                 let mut processes = Vec::new();
                 let core_count = sys.cpus().len() as f32;
                 
