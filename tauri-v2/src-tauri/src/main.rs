@@ -58,6 +58,72 @@ async fn get_process_icon(path: String) -> Result<String, String> {
 }
 
 // ============================================================================
+// Tauri Commands - 自启动管理
+// ============================================================================
+
+#[tauri::command]
+fn set_admin_autostart(enable: bool) -> Result<(), String> {
+    use std::process::Command;
+    use std::os::windows::process::CommandExt; // 必须引入这个 trait 才能用 creation_flags
+
+    // 获取当前 exe 路径
+    let app_path = std::env::current_exe()
+        .map_err(|e| e.to_string())?
+        .to_string_lossy()
+        .to_string();
+
+    let task_name = "TaskNexusAutoStart";
+    
+    // Windows API 常量：CREATE_NO_WINDOW
+    // 这是让黑框完全消失的魔法数字
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+    let script = if enable {
+        // 开启自启：创建最高权限任务
+        // 注意：-WindowStyle Hidden 是给 PowerShell 内部的指令，双重保险
+        format!(
+            r#"
+            $ErrorActionPreference = 'SilentlyContinue';
+            Unregister-ScheduledTask -TaskName "{name}" -Confirm:$false;
+            $Action = New-ScheduledTaskAction -Execute "{path}";
+            $Trigger = New-ScheduledTaskTrigger -AtLogon;
+            $Principal = New-ScheduledTaskPrincipal -UserId "NT AUTHORITY\INTERACTIVE" -LogonType Interactive -RunLevel Highest;
+            Register-ScheduledTask -TaskName "{name}" -Action $Action -Trigger $Trigger -Principal $Principal -Force;
+            "#,
+            name = task_name,
+            path = app_path
+        )
+    } else {
+        // 关闭自启：静默删除任务
+        format!(
+            r#"Unregister-ScheduledTask -TaskName "{}" -Confirm:$false -ErrorAction SilentlyContinue"#, 
+            task_name
+        )
+    };
+
+    // 执行命令
+    let output = Command::new("powershell")
+        .args(&[
+            "-NoProfile",        // 不加载用户配置文件（加快启动速度，减少闪烁风险）
+            "-NonInteractive",   // 不允许交互
+            "-WindowStyle", "Hidden", // 告诉 PowerShell 自身要隐藏
+            "-Command", &script
+        ])
+        .creation_flags(CREATE_NO_WINDOW) // 👈 核心：告诉 Windows 内核不要创建窗口
+        .output()
+        .map_err(|e| e.to_string())?;
+
+    if !output.status.success() {
+        // 只有出错时才把错误转成字符串返回，方便调试
+        // 正常情况下这里什么都不会发生
+        let err_msg = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("Task execution failed: {}", err_msg));
+    }
+
+    Ok(())
+}
+
+// ============================================================================
 // Tauri Commands - 进程管理
 // ============================================================================
 
@@ -498,6 +564,12 @@ async fn get_license_status() -> Result<serde_json::Value, String> {
     }))
 }
 
+/// 检查内测版是否过期
+#[tauri::command]
+async fn check_expiration() -> Result<task_nexus_lib::security::TimeBombStatus, String> {
+    Ok(task_nexus_lib::security::check_expiration().await)
+}
+
 // ============================================================================
 // 应用入口
 // ============================================================================
@@ -666,6 +738,8 @@ pub fn run() {
             activate_license,
             get_license_status,
             save_full_config,
+            check_expiration,
+            set_admin_autostart,
             // 注册表操作
             task_nexus_lib::registry::backup_registry,
             task_nexus_lib::registry::import_registry,

@@ -1,5 +1,5 @@
 import React from 'react';
-import { Zap, Scale, Trash2, Download, Upload, Settings } from 'lucide-react';
+import { Zap, Scale, Trash2, Download, Upload, Settings, AlertOctagon } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { save, open } from '@tauri-apps/plugin-dialog';
 
@@ -10,7 +10,7 @@ import { TimerResolutionControl } from './TimerResolution';
 import { SmartTrimControl } from './SmartTrimControl';
 import { ThrottleListEditor } from './ThrottleListEditor';
 import { GameListEditor } from './GameListEditor';
-import { AppSettings, ProcessProfile } from '../../types';
+import { AppSettings, ProcessProfile, TimeBombStatus } from '../../types';
 
 interface SettingsPanelProps {
     mode: string;
@@ -29,6 +29,11 @@ export default function SettingsPanel({
     onRemoveProfile,
     processes = []
 }: SettingsPanelProps) {
+    const [bombStatus, setBombStatus] = React.useState<TimeBombStatus | null>(null);
+
+    React.useEffect(() => {
+        invoke<TimeBombStatus>('check_expiration').then(setBombStatus).catch(console.error);
+    }, []);
 
     const handleImport = async () => {
         if (!confirm("导入配置将覆盖当前的核心调优设置 (Profiles, SmartTrim, ProBalance 等)，确定继续吗？")) return;
@@ -71,6 +76,27 @@ export default function SettingsPanel({
 
     return (
         <div className="space-y-4">
+            {/* Beta Expiration Info */}
+            {bombStatus && (
+                <div className="glass rounded-2xl p-4 shadow-soft border border-orange-100 bg-orange-50/30 flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 rounded-full bg-orange-100 flex items-center justify-center text-orange-600">
+                            <AlertOctagon size={20} />
+                        </div>
+                        <div>
+                            <h4 className="font-medium text-slate-700 text-sm">内测版有效期</h4>
+                            <p className="text-xs text-slate-500">
+                                截止日期: <span className="font-mono font-bold text-orange-600">{bombStatus.expiration_date}</span>
+                            </p>
+                        </div>
+                    </div>
+                    <div className="text-right">
+                        <div className="text-2xl font-bold text-slate-700 font-mono">{bombStatus.days_remaining}</div>
+                        <p className="text-[10px] text-slate-400">剩余天数</p>
+                    </div>
+                </div>
+            )}
+
             {/* 自动化策略 */}
             <div className="glass rounded-2xl p-5 shadow-soft">
                 <h4 className="font-medium text-slate-700 mb-4">自动化策略</h4>

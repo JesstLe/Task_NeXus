@@ -74,3 +74,11 @@ export interface ToastInfo {
     type: 'success' | 'info' | 'warning' | 'error';
     duration?: number;
 }
+
+export interface TimeBombStatus {
+    is_expired: boolean;
+    expiration_date: string;
+    current_date: string;
+    days_remaining: number;
+    verification_source: string;
+}

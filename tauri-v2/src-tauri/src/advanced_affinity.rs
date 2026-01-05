@@ -1,5 +1,5 @@
 use std::{thread as std_thread, time::Duration, collections::HashMap};
-use crate::{AppResult, AppError, governor, thread as thread_utils};
+use crate::{governor, thread as thread_utils};
 use tauri::command;
 
 /// 基于负载权重的级联映射算法 (Load-Weighted Cascading Mapping)

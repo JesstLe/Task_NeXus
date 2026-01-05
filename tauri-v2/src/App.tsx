@@ -8,7 +8,7 @@ import ManualOptimizer from './components/ManualOptimizer';
 import AdvancedPanel from './components/AdvancedPanel';
 import Toast, { ToastContainer } from './components/Toast';
 import ActivationDialog from './components/ActivationDialog';
-import { Activity, Settings, Zap, SlidersHorizontal } from 'lucide-react';
+import { Activity, Settings, Zap, SlidersHorizontal, AlertOctagon } from 'lucide-react';
 import { getCpuArchitecture } from './data/cpuDatabase';
 import { invoke } from '@tauri-apps/api/core';
 import {
@@ -18,7 +18,8 @@ import {
     AppSettings,
     ToastInfo,
     ProcessProfile,
-    LogicalCore
+    LogicalCore,
+    TimeBombStatus
 } from './types';
 
 function App() {
@@ -43,6 +44,7 @@ function App() {
         invoke<LogicalCore[]>('get_cpu_topology').then(setTopology).catch(console.error);
     }, []);
     const [isActivated, setIsActivated] = useState(true);
+    const [expirationStatus, setExpirationStatus] = useState<TimeBombStatus | null>(null);
 
     const showToast = (message: string, type: ToastInfo['type'] = 'success', duration = 3000) => {
         const id = Date.now() + Math.random();
@@ -84,6 +86,16 @@ function App() {
 
                 const licenseStatus = await invoke<{ activated: boolean }>('get_license_status');
                 setIsActivated(licenseStatus.activated);
+
+                // Run Time Bomb Check
+                if (licenseStatus.activated) {
+                    const bombStatus = await invoke<TimeBombStatus>('check_expiration');
+                    if (bombStatus.is_expired) {
+                        setExpirationStatus(bombStatus);
+                        setLoading(false);
+                        return; // Stop initialization
+                    }
+                }
 
                 const arch = getCpuArchitecture(info.model);
                 setCpuArch(arch);
@@ -186,6 +198,18 @@ function App() {
                     closeToTray: '关闭时最小化'
                 };
                 const settingName = settingNames[key] || key;
+
+                // Special handling for autostart
+                if (key === 'launchOnStartup') {
+                    try {
+                        await invoke('set_admin_autostart', { enable: value });
+                    } catch (err) {
+                        console.error('Failed to set autostart:', err);
+                        showToast(`自启动设置失败: ${err}`, 'error');
+                        return; // Stop if autostart setup failed
+                    }
+                }
+
                 showToast(`${settingName}已${value ? '启用' : '禁用'} `, 'success');
             }
         } catch (e) {
@@ -335,6 +359,40 @@ function App() {
 
     return (
         <div className="flex flex-col h-screen bg-gradient-to-br from-slate-50 via-white to-violet-50 overflow-hidden">
+            {expirationStatus?.is_expired && (
+                <div className="fixed inset-0 z-[100] bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
+                    <div className="bg-white rounded-3xl shadow-2xl max-w-md w-full p-8 text-center animate-in zoom-in duration-300">
+                        <div className="w-20 h-20 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-6">
+                            <AlertOctagon size={40} className="text-red-600" />
+                        </div>
+                        <h2 className="text-2xl font-bold text-slate-800 mb-2">内测版本已过期</h2>
+                        <p className="text-slate-500 mb-6">
+                            感谢您参与本次内测。该版本已于 <span className="font-bold text-slate-700">{expirationStatus.expiration_date}</span> 停止服务。
+                            <br />请下载最新的正式版以继续使用。
+                        </p>
+                        <div className="bg-slate-50 rounded-xl p-4 mb-8 text-left text-xs text-slate-400 font-mono space-y-1">
+                            <div className="flex justify-between">
+                                <span>当前时间:</span>
+                                <span>{expirationStatus.current_date}</span>
+                            </div>
+                            <div className="flex justify-between">
+                                <span>截止日期:</span>
+                                <span>{expirationStatus.expiration_date}</span>
+                            </div>
+                            <div className="flex justify-between">
+                                <span>校验来源:</span>
+                                <span>{expirationStatus.verification_source}</span>
+                            </div>
+                        </div>
+                        <button
+                            onClick={() => invoke('window_close')}
+                            className="w-full py-3.5 bg-slate-900 hover:bg-slate-800 text-white rounded-xl font-bold transition-all shadow-lg hover:shadow-xl active:scale-95"
+                        >
+                            退出程序
+                        </button>
+                    </div>
+                </div>
+            )}
             {!isActivated && <ActivationDialog onActivated={() => setIsActivated(true)} />}
             <Header cpuModel={cpuInfo?.model} />
 
