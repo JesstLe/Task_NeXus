@@ -101,15 +101,33 @@ pub async fn detect_cpu_topology() -> AppResult<CpuTopology> {
         // Intel 混合架构检测
         if vendor == CpuVendor::Intel {
             if let Some((p_cores, e_cores)) = detect_intel_hybrid(&model) {
-                topology.p_cores = Some(p_cores);
-                topology.e_cores = Some(e_cores);
-                topology.is_hybrid = e_cores > 0;
+                // SAFETY CHECK: Verify detected topology matches actual core count
+                // P-Cores have hyperthreading (2 threads each), E-Cores have 1 thread each
+                let expected_threads = (p_cores * 2) + e_cores;
+                
+                // Only apply hybrid configuration if it matches actual core count (or is close)
+                // Allow 10% tolerance for edge cases
+                let tolerance = (expected_threads as f32 * 0.1).ceil() as u32;
+                if expected_threads <= logical_cores + tolerance && expected_threads + tolerance >= logical_cores {
+                    topology.p_cores = Some(p_cores);
+                    topology.e_cores = Some(e_cores);
+                    topology.is_hybrid = e_cores > 0;
 
-                // 计算掩码
-                // P-Core 在前，每个 P-Core 有 2 个线程
-                let p_threads = p_cores * 2;
-                topology.p_core_mask = (1u64 << p_threads) - 1;
-                topology.e_core_mask = ((1u64 << logical_cores) - 1) ^ topology.p_core_mask;
+                    // 计算掩码
+                    // P-Core 在前，每个 P-Core 有 2 个线程
+                    let p_threads = p_cores * 2;
+                    // Clamp p_threads to not exceed logical_cores
+                    let p_threads_clamped = p_threads.min(logical_cores);
+                    topology.p_core_mask = (1u64 << p_threads_clamped) - 1;
+                    topology.e_core_mask = ((1u64 << logical_cores) - 1) ^ topology.p_core_mask;
+                } else {
+                    // Mismatch detected (wrong model lookup?) - use safe defaults
+                    tracing::warn!(
+                        "CPU topology mismatch: detected {}P+{}E={}T but actual is {}T. Using safe fallback.",
+                        p_cores, e_cores, expected_threads, logical_cores
+                    );
+                    // is_hybrid stays false, masks stay 0 - safe fallback
+                }
             }
         }
 
@@ -138,45 +156,41 @@ pub async fn detect_cpu_topology() -> AppResult<CpuTopology> {
 fn detect_intel_hybrid(model: &str) -> Option<(u32, u32)> {
     let model_upper = model.to_uppercase();
 
-    // 12代 Alder Lake
-    if model_upper.contains("12900") {
-        return Some((8, 8));
-    }
-    if model_upper.contains("12700") {
-        return Some((8, 4));
-    }
-    if model_upper.contains("12600K") {
-        return Some((6, 4));
-    }
-    if model_upper.contains("12400") {
-        return Some((6, 0));
-    }
+    // 14代 Raptor Lake Refresh (Desktop & Mobile HX)
+    if model_upper.contains("14900HX") { return Some((8, 16)); }  // Mobile HX
+    if model_upper.contains("14900") { return Some((8, 16)); }     // Desktop
+    if model_upper.contains("14700HX") { return Some((8, 12)); }  // Mobile HX
+    if model_upper.contains("14700") { return Some((8, 12)); }     // Desktop
+    if model_upper.contains("14600HX") { return Some((6, 8)); }   // Mobile HX
+    if model_upper.contains("14600") { return Some((6, 8)); }      // Desktop
 
-    // 13代 Raptor Lake
-    if model_upper.contains("13900") {
-        return Some((8, 16));
-    }
-    if model_upper.contains("13700") {
-        return Some((8, 8));
-    }
-    if model_upper.contains("13600") {
-        return Some((6, 8));
-    }
-    if model_upper.contains("13400") {
-        return Some((6, 4));
-    }
+    // 13代 Raptor Lake (Desktop & Mobile HX/H)
+    if model_upper.contains("13980HX") || model_upper.contains("13950HX") { return Some((8, 16)); } // Mobile HX Extreme
+    if model_upper.contains("13900HX") { return Some((8, 16)); }  // Mobile HX (same as desktop)
+    if model_upper.contains("13900HK") || model_upper.contains("13900H") { return Some((6, 8)); } // Mobile H/HK
+    if model_upper.contains("13900") { return Some((8, 16)); }     // Desktop
+    if model_upper.contains("13700HX") { return Some((8, 8)); }   // Mobile HX
+    if model_upper.contains("13700H") { return Some((6, 8)); }    // Mobile H
+    if model_upper.contains("13700") { return Some((8, 8)); }      // Desktop
+    if model_upper.contains("13650HX") || model_upper.contains("13600HX") { return Some((6, 8)); } // Mobile HX
+    if model_upper.contains("13600H") { return Some((4, 8)); }    // Mobile H
+    if model_upper.contains("13600") { return Some((6, 8)); }      // Desktop
+    if model_upper.contains("13500HX") { return Some((6, 8)); }   // Mobile HX
+    if model_upper.contains("13500H") { return Some((4, 8)); }    // Mobile H
+    if model_upper.contains("13400") { return Some((6, 4)); }
 
-    // 14代 Raptor Lake Refresh
-    if model_upper.contains("14900") {
-        return Some((8, 16));
-    }
-    if model_upper.contains("14700") {
-        return Some((8, 12));
-    }
-    if model_upper.contains("14600") {
-        return Some((6, 8));
-    }
+    // 12代 Alder Lake (Desktop & Mobile HX/H)
+    if model_upper.contains("12900HX") { return Some((8, 8)); }   // Mobile HX
+    if model_upper.contains("12900HK") || model_upper.contains("12900H") { return Some((6, 8)); } // Mobile H/HK
+    if model_upper.contains("12900") { return Some((8, 8)); }      // Desktop
+    if model_upper.contains("12800H") { return Some((6, 8)); }    // Mobile H
+    if model_upper.contains("12700H") { return Some((6, 8)); }    // Mobile H
+    if model_upper.contains("12700") { return Some((8, 4)); }      // Desktop
+    if model_upper.contains("12650H") { return Some((6, 4)); }    // Mobile H
+    if model_upper.contains("12600K") { return Some((6, 4)); }    // Desktop
+    if model_upper.contains("12400") { return Some((6, 0)); }
 
+    // No match - return None (caller should use safe fallback)
     None
 }
 

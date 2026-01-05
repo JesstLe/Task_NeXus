@@ -41,6 +41,7 @@ export const AMD_CPU_DATABASE: Record<string, AmdConfig> = {
 };
 
 export const INTEL_CPU_DATABASE: Record<string, IntelConfig> = {
+    // Desktop (K/KS series)
     '12900K': { pCores: 8, eCores: 8, totalThreads: 24 },
     '12900KS': { pCores: 8, eCores: 8, totalThreads: 24 },
     '12700K': { pCores: 8, eCores: 4, totalThreads: 20 },
@@ -55,6 +56,27 @@ export const INTEL_CPU_DATABASE: Record<string, IntelConfig> = {
     '14900KS': { pCores: 8, eCores: 16, totalThreads: 32 },
     '14700K': { pCores: 8, eCores: 12, totalThreads: 28 },
     '14600K': { pCores: 6, eCores: 8, totalThreads: 20 },
+    // Mobile (HX/H/HK series) - Critical for laptop users
+    '12900HX': { pCores: 8, eCores: 8, totalThreads: 24 },
+    '12900HK': { pCores: 6, eCores: 8, totalThreads: 20 },
+    '12900H': { pCores: 6, eCores: 8, totalThreads: 20 },
+    '12700H': { pCores: 6, eCores: 8, totalThreads: 20 },
+    '12650H': { pCores: 6, eCores: 4, totalThreads: 16 },
+    '13980HX': { pCores: 8, eCores: 16, totalThreads: 32 },
+    '13950HX': { pCores: 8, eCores: 16, totalThreads: 32 },
+    '13900HX': { pCores: 8, eCores: 16, totalThreads: 32 },
+    '13900HK': { pCores: 6, eCores: 8, totalThreads: 20 },
+    '13900H': { pCores: 6, eCores: 8, totalThreads: 20 },
+    '13700HX': { pCores: 8, eCores: 8, totalThreads: 24 },
+    '13700H': { pCores: 6, eCores: 8, totalThreads: 20 },
+    '13650HX': { pCores: 6, eCores: 8, totalThreads: 20 },
+    '13600HX': { pCores: 6, eCores: 8, totalThreads: 20 },
+    '13600H': { pCores: 4, eCores: 8, totalThreads: 16 },
+    '13500HX': { pCores: 6, eCores: 8, totalThreads: 20 },
+    '13500H': { pCores: 4, eCores: 8, totalThreads: 16 },
+    '14900HX': { pCores: 8, eCores: 16, totalThreads: 32 },
+    '14700HX': { pCores: 8, eCores: 12, totalThreads: 28 },
+    '14600HX': { pCores: 6, eCores: 8, totalThreads: 20 },
 };
 
 export function extractAmdModel(modelName: string): string | null {
@@ -65,7 +87,8 @@ export function extractAmdModel(modelName: string): string | null {
 
 export function extractIntelModel(modelName: string): string | null {
     if (!modelName) return null;
-    const match = modelName.match(/\b(1[2-4]\d{3}K?S?)\b/i);
+    // Updated regex: supports K, KS, H, HX, HK suffixes for desktop and mobile CPUs
+    const match = modelName.match(/\b(1[2-4]\d{3}[KH]?[SXK]?)\b/i);
     return match ? match[1].toUpperCase() : null;
 }
 
