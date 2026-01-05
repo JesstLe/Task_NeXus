@@ -248,6 +248,65 @@ async fn restore_all() {
         let _ = governor::set_priority(pid, PriorityLevel::Normal).await;
     }
 }
+/// 获取默认的核心分配掩码 (基于硬件拓扑)
+pub fn get_default_masks() -> (u64, u64) {
+    use crate::hardware_topology::{get_cpu_topology, CoreType};
+
+    match get_cpu_topology() {
+        Ok(topology) => {
+            let has_e_cores = topology.iter().any(|c| c.core_type == CoreType::Efficiency);
+            let has_vcache = topology.iter().any(|c| c.core_type == CoreType::VCache);
+
+            let mut game_mask = 0u64;
+            let mut system_mask = 0u64;
+
+            if has_e_cores {
+                // Intel 混合架构: 游戏 -> P核, 系统 -> E核
+                for c in &topology {
+                    let bit = 1u64 << (c.id % 64);
+                    if c.core_type == CoreType::Performance {
+                        game_mask |= bit;
+                    } else if c.core_type == CoreType::Efficiency {
+                        system_mask |= bit;
+                    }
+                }
+            } else if has_vcache {
+                // AMD V-Cache 架构: 游戏 -> V-Cache 核心, 系统 -> 其他核心
+                for c in &topology {
+                    let bit = 1u64 << (c.id % 64);
+                    if c.core_type == CoreType::VCache {
+                        game_mask |= bit;
+                    } else {
+                        system_mask |= bit;
+                    }
+                }
+            } else {
+                // 标准 CPU 或未能分类: 50/50 比例对分
+                let count = topology.len();
+                let half = count / 2;
+                for (i, c) in topology.iter().enumerate() {
+                    let bit = 1u64 << (c.id % 64);
+                    if i < (count - half) {
+                        game_mask |= bit;
+                    } else {
+                        system_mask |= bit;
+                    }
+                }
+            }
+
+            // 安全兜底
+            if game_mask == 0 { game_mask = 0xFFFF; }
+            if system_mask == 0 { system_mask = game_mask; }
+
+            (game_mask, system_mask)
+        }
+        Err(e) => {
+            tracing::error!("Failed to get topology for default masks: {}", e);
+            (0xFFFF, 0xFFFF)
+        }
+    }
+}
+
 pub async fn apply_default_rules(processes: &[ProcessInfo]) {
     let config = config::get_config().await.unwrap_or_default();
     let rules = config.default_rules;
@@ -258,6 +317,13 @@ pub async fn apply_default_rules(processes: &[ProcessInfo]) {
 
     let profiles = config::get_profiles().await.unwrap_or_default();
     let game_list: Vec<String> = config.game_list.iter().map(|s| s.to_lowercase()).collect();
+
+    // 预计算自动掩码 (仅当需要时)
+    let (auto_game, auto_system) = if rules.game_mask.is_none() || rules.system_mask.is_none() {
+        get_default_masks()
+    } else {
+        (0, 0)
+    };
 
     let mut operation_budget = 5;
 
@@ -278,27 +344,30 @@ pub async fn apply_default_rules(processes: &[ProcessInfo]) {
         // 3. 应用规则
         if is_game {
             // 应用游戏规则 (P-Core/CCD0)
-            if let Some(mask) = &rules.game_mask {
-                let target_mask = u64::from_str_radix(mask, 16).unwrap_or(0);
-                let current_mask = if p.cpu_affinity == "All" { u64::MAX } else { u64::from_str_radix(p.cpu_affinity.trim_start_matches("0x"), 16).unwrap_or(0) };
+            let target_mask = rules.game_mask.as_ref()
+                .and_then(|m| u64::from_str_radix(m.trim_start_matches("0x"), 16).ok())
+                .unwrap_or(auto_game);
+            
+            let current_mask = if p.cpu_affinity == "All" { u64::MAX } else { u64::from_str_radix(p.cpu_affinity.trim_start_matches("0x"), 16).unwrap_or(0) };
 
-                if current_mask != target_mask {
-                    // Check cache
-                    let mut cache = LAST_APPLIED_STATE.write();
-                    let should_apply = if let Some((last, _)) = cache.get(&p.pid) {
-                        *last != target_mask
-                    } else {
-                        true
-                    };
+            if target_mask > 0 && current_mask != target_mask {
+                // Check cache
+                let mut cache = LAST_APPLIED_STATE.write();
+                let should_apply = if let Some((last, _)) = cache.get(&p.pid) {
+                    *last != target_mask
+                } else {
+                    true
+                };
 
-                    if should_apply {
-                        tracing::info!("DefaultRules: Mapping game {} to {}", p.name, mask);
-                        let _ = governor::set_process_affinity(p.pid, mask.clone()).await;
-                        cache.insert(p.pid, (target_mask, rules.game_priority.clone()));
-                        changed = true;
-                    }
+                if should_apply {
+                    let mask_hex = format!("{:X}", target_mask);
+                    tracing::info!("DefaultRules: Mapping game {} to 0x{}", p.name, mask_hex);
+                    let _ = governor::set_process_affinity(p.pid, mask_hex).await;
+                    cache.insert(p.pid, (target_mask, rules.game_priority.clone()));
+                    changed = true;
                 }
             }
+            
             if let Some(level) = PriorityLevel::from_str(&rules.game_priority) {
                 if p.priority != rules.game_priority {
                     let _ = governor::set_priority(p.pid, level).await;
@@ -312,8 +381,11 @@ pub async fn apply_default_rules(processes: &[ProcessInfo]) {
                 continue;
             }
 
-            if let Some(mask) = &rules.system_mask {
-                let target_mask = u64::from_str_radix(mask, 16).unwrap_or(0);
+            let target_mask = rules.system_mask.as_ref()
+                .and_then(|m| u64::from_str_radix(m.trim_start_matches("0x"), 16).ok())
+                .unwrap_or(auto_system);
+
+            if target_mask > 0 {
                 let current_mask = if p.cpu_affinity == "All" { u64::MAX } else { u64::from_str_radix(p.cpu_affinity.trim_start_matches("0x"), 16).unwrap_or(0) };
 
                 if current_mask != target_mask {
@@ -328,8 +400,9 @@ pub async fn apply_default_rules(processes: &[ProcessInfo]) {
                         };
 
                         if should_apply {
-                            tracing::info!("DefaultRules: Mapping system process {} to {}", p.name, mask);
-                            let _ = governor::set_process_affinity(p.pid, mask.clone()).await;
+                            let mask_hex = format!("{:X}", target_mask);
+                            tracing::info!("DefaultRules: Mapping system process {} to 0x{}", p.name, mask_hex);
+                            let _ = governor::set_process_affinity(p.pid, mask_hex).await;
                             cache.insert(p.pid, (target_mask, rules.system_priority.clone()));
                             changed = true;
                         }

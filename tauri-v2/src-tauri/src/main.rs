@@ -583,8 +583,15 @@ pub fn run() {
     // ------------------------------------------------------------------------
     
     // 1. Configure File Appender (Rolling daily)
-    // Use BLOCKING appender to ensure crash logs are written before exit.
-    let file_appender = tracing_appender::rolling::daily("logs", "task-nexus.log");
+    // Use LocalAppData/Task Nexus/logs for reliability
+    let log_dir = dirs::data_local_dir()
+        .map(|p| p.join("Task Nexus").join("logs"))
+        .unwrap_or_else(|| std::path::PathBuf::from("logs"));
+
+    // Ensure directory exists
+    let _ = std::fs::create_dir_all(&log_dir);
+
+    let file_appender = tracing_appender::rolling::daily(&log_dir, "task-nexus.log");
 
     // 2. Init Tracing (Stdout + File)
     tracing_subscriber::registry()
@@ -602,7 +609,7 @@ pub fn run() {
         eprintln!("Application Panicked: {:?}", info);
     }));
 
-    tracing::info!("Task Nexus starting (Logging to logs/task-nexus.log)...");
+    tracing::info!("Task Nexus starting (Logging to {:?})...", log_dir);
 
     let monitor = std::sync::Arc::new(task_nexus_lib::monitor::ProcessMonitor::new());
     let monitor_clone = monitor.clone();

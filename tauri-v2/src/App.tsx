@@ -196,7 +196,8 @@ function App() {
             if (result.success) {
                 const settingNames: Record<string, string> = {
                     launchOnStartup: '开机自启动',
-                    closeToTray: '关闭时最小化'
+                    closeToTray: '关闭时最小化',
+                    defaultRules: '默认规则'
                 };
                 const settingName = settingNames[key] || key;
 
@@ -211,7 +212,8 @@ function App() {
                     }
                 }
 
-                showToast(`${settingName}已${value ? '启用' : '禁用'} `, 'success');
+                const isEnabled = typeof value === 'object' && value !== null ? !!value.enabled : !!value;
+                showToast(`${settingName}已${isEnabled ? '启用' : '禁用'}`, 'success');
             }
         } catch (e) {
             console.error(e);
