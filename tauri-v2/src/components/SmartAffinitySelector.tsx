@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Zap, Cpu, MousePointer2, Settings, Layers, RefreshCw, Check, Hash, X } from 'lucide-react';
-import { TopologyCore } from '../types';
+import { LogicalCore } from '../types';
 
 const CoreTypeColors: Record<string, string> = {
     'Performance': 'border-blue-500 bg-blue-50 text-blue-700',
@@ -17,7 +17,7 @@ const CoreTypeLabels: Record<string, string> = {
 };
 
 interface SmartAffinitySelectorProps {
-    topology: TopologyCore[];
+    topology: LogicalCore[];
     currentAffinity?: string;
     initialCpuSets?: number[];
     primaryCore?: number | null;
@@ -77,7 +77,7 @@ export default function SmartAffinitySelector({
         } catch { }
     };
 
-    const selectCores = (filterFn: (c: TopologyCore) => boolean) => {
+    const selectCores = (filterFn: (c: LogicalCore) => boolean) => {
         let newMask = 0n;
         topology.forEach(core => {
             if (filterFn(core)) newMask |= (1n << BigInt(core.id));

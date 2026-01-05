@@ -6,6 +6,7 @@
 
 use task_nexus_lib::{
     config, governor, hardware, hardware_topology, power, thread, tweaks, AppError,
+    advanced_affinity,
 };
 use tauri::{
     menu::{Menu, MenuItem},
@@ -93,6 +94,77 @@ async fn set_process_affinity(
         .await
         .map(|_| serde_json::json!({"success": true}))
         .map_err(|e: AppError| e.to_string())
+}
+
+/// 批量手动设置进程亲和性
+#[tauri::command]
+async fn batch_apply_affinity(
+    pids: Vec<u32>,
+    mask_hex: String,
+    lock_heavy_thread: bool,
+) -> Result<serde_json::Value, String> {
+    let mask = u64::from_str_radix(&mask_hex, 16).map_err(|_| "无效的十六进制掩码")?;
+    if mask == 0 {
+        return Err("掩码不能为空 (进程至少需要一个核心)".into());
+    }
+
+    // 找到掩码中的第一个核心，用于线程绑定
+    let mut target_core = 0;
+    for i in 0..64 {
+        if (mask & (1 << i)) != 0 {
+            target_core = i;
+            break;
+        }
+    }
+
+    let mut success_count = 0;
+    for pid in pids {
+        // 1. 设置进程亲和性
+        if governor::set_process_affinity(pid, mask_hex.clone()).await.is_ok() {
+            success_count += 1;
+            
+            // 2. 如果开启了主线程锁定
+            if lock_heavy_thread {
+                let _ = thread::smart_bind_thread(pid, target_core as u32).await;
+            }
+        }
+    }
+
+    Ok(serde_json::json!({
+        "success": true,
+        "count": success_count
+    }))
+}
+
+/// 批量还原进程至默认状态 (全核心掩码 + 正常优先级)
+#[tauri::command]
+async fn batch_reset_to_default(pids: Vec<u32>) -> Result<String, String> {
+    // 1. 获取 CPU 拓扑以计算全掩码
+    let topo = hardware_topology::get_cpu_topology().map_err(|e| e.to_string())?;
+    let mut all_cores_mask: u64 = 0;
+    for core in topo {
+        all_cores_mask |= 1u64 << core.id;
+    }
+
+    let mut success_count = 0;
+    for pid in pids {
+        // A. 重置进程亲和性 (全核心)
+        if let Ok(_) = governor::set_process_affinity(pid, format!("{:x}", all_cores_mask)).await {
+            // B. 重置线程亲和性 (释放可能的手动锁定)
+            if let Ok(threads) = thread::get_process_threads(pid) {
+                for t in threads {
+                    let _ = thread::set_thread_affinity(t.tid, all_cores_mask);
+                }
+            }
+
+            // C. 重置优先级为 Normal
+            let _ = governor::set_priority(pid, task_nexus_lib::PriorityLevel::Normal).await;
+            
+            success_count += 1;
+        }
+    }
+
+    Ok(format!("已将 {} 个进程还原为默认状态", success_count))
 }
 
 /// 设置进程优先级
@@ -578,6 +650,9 @@ pub fn run() {
             add_profile,
             remove_profile,
             get_profiles,
+            batch_apply_affinity,
+            batch_reset_to_default,
+            advanced_affinity::apply_cascading_affinity,
             import_config_file,
             export_config_file,
             // 窗口控制

@@ -1,13 +1,14 @@
 import React, { useState, useRef } from 'react';
 import ReactDOM from 'react-dom';
 import {
-    CheckSquare, Square, ChevronRight, ChevronDown
+    CheckSquare, Square, ChevronRight, ChevronDown, Cpu, RotateCcw
 } from 'lucide-react';
 import { GeekEditor } from './settings/GeekEditor';
 import { invoke } from '@tauri-apps/api/core';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import SmartAffinitySelector from './SmartAffinitySelector';
-import { ProcessInfo, AppSettings } from '../types';
+import CoreGridSelector from './CoreGridSelector';
+import { ProcessInfo, AppSettings, LogicalCore } from '../types';
 
 // New Modular Imports
 import { ProcessIcon } from './common/ProcessIcon';
@@ -89,6 +90,7 @@ export default function ProcessScanner({
     const [isGeekEditorOpen, setIsGeekEditorOpen] = useState(false);
     const [menuState, setMenuState] = useState<{ visible: boolean, x: number, y: number, process: any }>({ visible: false, x: 0, y: 0, process: null });
     const [affinityModal, setAffinityModal] = useState<{ visible: boolean, process: any }>({ visible: false, process: null });
+    const [batchAffinityOpen, setBatchAffinityOpen] = useState(false);
 
     // Handlers
     const handleModeClick = async (id: string) => {
@@ -223,6 +225,46 @@ export default function ProcessScanner({
         } catch (e) {
             console.error('Affinity Apply Error:', e);
             showToast(`设置失败: ${e}`, 'error');
+        }
+    };
+
+    const handleBatchAffinityAction = async (maskHex: string, lockHeavy: boolean) => {
+        try {
+            const pidsString = Array.from(selectedPids).join(',');
+            showToast(`正在应用配置到 ${selectedPids.size} 个进程...`, 'info');
+
+            const result = await invoke<any>('batch_apply_affinity', {
+                pids: Array.from(selectedPids),
+                maskHex,
+                lockHeavyThread: lockHeavy
+            });
+
+            if (result.success) {
+                showToast(`批量设置成功: ${result.count} 个进程已更新`, 'success');
+                setBatchAffinityOpen(false);
+                setSelectedPids(new Set());
+                setTimeout(onScan, 500);
+            }
+        } catch (e) {
+            console.error("Batch Affinity Error:", e);
+            showToast(`批量设置失败: ${e}`, 'error');
+        }
+    };
+
+    const handleResetDefault = async () => {
+        if (selectedPids.size === 0) return;
+        try {
+            showToast(`正在还原 ${selectedPids.size} 个进程...`, 'info');
+            const result = await invoke<string>('batch_reset_to_default', {
+                pids: Array.from(selectedPids)
+            });
+            showToast(result, 'success');
+            setSelectedPids(new Set());
+            onSelect(null);
+            setTimeout(onScan, 500);
+        } catch (e) {
+            console.error("Reset Default Error:", e);
+            showToast(`还原失败: ${e}`, 'error');
         }
     };
 
@@ -379,10 +421,60 @@ export default function ProcessScanner({
                     </div>
 
                     {menuState.visible && typeof document !== 'undefined' && ReactDOM.createPortal(
-                        <ProcessContextMenu x={menuState.x} y={menuState.y} process={menuState.process} onClose={() => setMenuState({ ...menuState, visible: false })} onAction={menuAction} />,
+                        <ProcessContextMenu
+                            x={menuState.x}
+                            y={menuState.y}
+                            process={menuState.process}
+                            onClose={() => setMenuState({ ...menuState, visible: false })}
+                            onAction={menuAction}
+                            initialPrimaryCore={settings.profiles?.find(p => p.name === menuState.process.name)?.primaryCore}
+                        />,
                         document.body
                     )}
+
+                    {/* Batch Action Bar */}
+                    {selectedPids.size > 0 && (
+                        <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-40 animate-in slide-in-from-bottom-4 duration-300">
+                            <div className="bg-slate-900/90 backdrop-blur-xl border border-white/10 rounded-2xl px-6 py-3 shadow-2xl flex items-center gap-6">
+                                <div className="flex items-center gap-2">
+                                    <div className="w-2 h-2 rounded-full bg-violet-400 animate-pulse" />
+                                    <span className="text-white text-sm font-bold">已选择 {selectedPids.size} 个进程</span>
+                                </div>
+                                <div className="h-4 w-px bg-white/10" />
+                                <div className="flex gap-2">
+                                    <button
+                                        onClick={() => setBatchAffinityOpen(true)}
+                                        className="px-4 py-1.5 bg-violet-500 hover:bg-violet-400 text-white text-xs font-bold rounded-lg transition-all flex items-center gap-2"
+                                    >
+                                        <Cpu size={14} /> 设置亲和性 (手动)
+                                    </button>
+                                    <button
+                                        onClick={handleResetDefault}
+                                        className="px-4 py-1.5 bg-slate-700 hover:bg-slate-600 text-slate-100 text-xs font-bold rounded-lg transition-all flex items-center gap-2 border border-slate-600"
+                                        title="重置亲和性和优先级"
+                                    >
+                                        <RotateCcw size={14} /> 还原默认
+                                    </button>
+                                    <button
+                                        onClick={() => { setSelectedPids(new Set()); onSelect(null); }}
+                                        className="px-4 py-1.5 bg-white/10 hover:bg-white/20 text-white/70 text-xs font-bold rounded-lg transition-all"
+                                    >
+                                        取消选择
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
                 </div>
+
+                {batchAffinityOpen && (
+                    <CoreGridSelector
+                        topology={topology as any}
+                        pids={Array.from(selectedPids)}
+                        onApply={handleBatchAffinityAction}
+                        onCancel={() => setBatchAffinityOpen(false)}
+                    />
+                )}
 
                 {affinityModal.visible && (
                     <SmartAffinitySelector

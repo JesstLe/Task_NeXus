@@ -90,9 +90,9 @@ const ContextMenuItem = ({ label, icon: Icon, shortcut, subMenu, onClick, danger
     );
 };
 
-export const ThreadBindingSelector = ({ process, onBind }: { process: ProcessInfo, onBind: (core: number) => void }) => {
+export const ThreadBindingSelector = ({ process, initialCore, onBind }: { process: ProcessInfo, initialCore?: number | null, onBind: (core: number) => void }) => {
     const coreCount = navigator.hardwareConcurrency || 16;
-    const [selectedCore, setSelectedCore] = useState(0);
+    const [selectedCore, setSelectedCore] = useState(initialCore ?? 0);
 
     return (
         <div className="p-2 w-64">
@@ -124,9 +124,10 @@ interface ProcessContextMenuProps {
     process: ProcessInfo;
     onClose: () => void;
     onAction: (cmd: string, args: any) => void;
+    initialPrimaryCore?: number | null;
 }
 
-export const ProcessContextMenu = ({ x, y, process, onClose, onAction }: ProcessContextMenuProps) => {
+export const ProcessContextMenu = ({ x, y, process, onClose, onAction, initialPrimaryCore }: ProcessContextMenuProps) => {
     const [position, setPosition] = useState({ top: y, left: x });
     const menuRef = useRef<HTMLDivElement>(null);
 
@@ -183,6 +184,7 @@ export const ProcessContextMenu = ({ x, y, process, onClose, onAction }: Process
                     subMenu={
                         <ThreadBindingSelector
                             process={process}
+                            initialCore={initialPrimaryCore}
                             onBind={(targetCore) => { onAction('bind_heaviest_thread', { pid: process.pid, targetCore }); onClose(); }}
                         />
                     }

@@ -16,6 +16,13 @@ export interface TopologyCore {
     cpus: number[];
 }
 
+export interface LogicalCore {
+    id: number;
+    core_type: 'Performance' | 'Efficiency' | 'VCache' | 'Unknown';
+    physical_id: number;
+    group_id: number;
+}
+
 export interface ProcessInfo {
     pid: number;
     name: string;

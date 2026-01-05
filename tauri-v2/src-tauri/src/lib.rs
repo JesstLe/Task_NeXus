@@ -13,6 +13,7 @@ pub mod tweaks;
 pub mod watchdog;
 pub mod icons;
 pub mod registry;
+pub mod advanced_affinity;
 
 use serde::{Deserialize, Serialize};
 

@@ -1,14 +1,14 @@
 import { useState, useEffect, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import { ProcessInfo, TopologyCore } from '../../types';
+import { ProcessInfo, LogicalCore } from '../../types';
 
 export function useProcessData(initialProcesses: ProcessInfo[]) {
     const [processes, setProcesses] = useState<any[]>(initialProcesses);
     const [history, setHistory] = useState<{ cpu: number[], memory: number[] }>({ cpu: [], memory: [] });
     const [loading, setLoading] = useState(true);
     const [isPaused, setIsPaused] = useState(false);
-    const [topology, setTopology] = useState<TopologyCore[]>([]);
+    const [topology, setTopology] = useState<LogicalCore[]>([]);
 
     const pausedRef = useRef(isPaused);
     useEffect(() => { pausedRef.current = isPaused; }, [isPaused]);

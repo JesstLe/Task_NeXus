@@ -4,7 +4,7 @@ import ProcessScanner from './components/ProcessScanner';
 import CoreGrid from './components/CoreGrid';
 import ControlBar from './components/ControlBar';
 import SettingsPanel from './components/settings/SettingsPanel';
-import SystemOptimizer from './components/SystemOptimizer';
+import ManualOptimizer from './components/ManualOptimizer';
 import AdvancedPanel from './components/AdvancedPanel';
 import Toast, { ToastContainer } from './components/Toast';
 import ActivationDialog from './components/ActivationDialog';
@@ -17,7 +17,8 @@ import {
     ProcessInfo,
     AppSettings,
     ToastInfo,
-    ProcessProfile
+    ProcessProfile,
+    LogicalCore
 } from './types';
 
 function App() {
@@ -36,6 +37,11 @@ function App() {
     const [priority, setPriority] = useState('Normal');
     const [toasts, setToasts] = useState<ToastInfo[]>([]);
     const [selectedPids, setSelectedPids] = useState<Set<number>>(new Set());
+    const [topology, setTopology] = useState<LogicalCore[]>([]);
+
+    useEffect(() => {
+        invoke<LogicalCore[]>('get_cpu_topology').then(setTopology).catch(console.error);
+    }, []);
     const [isActivated, setIsActivated] = useState(true);
 
     const showToast = (message: string, type: ToastInfo['type'] = 'success', duration = 3000) => {
@@ -341,7 +347,7 @@ function App() {
                         <Settings size={16} /><span>设置</span>
                     </button>
                     <button onClick={() => setActiveTab('optimizer')} className={`px-4 py-2 rounded-lg text-sm font-medium transition-all flex items-center gap-2 ${activeTab === 'optimizer' ? 'bg-violet-500 text-white' : 'text-slate-500 hover:bg-slate-100'}`}>
-                        <Zap size={16} /><span>一键优化</span>
+                        <Zap size={16} /><span>高级调优</span>
                     </button>
                     {/* 暂时隐藏高级选项============================================================================================================== */}
                     {/* <button onClick={() => setActiveTab('advanced')} className={`px-4 py-2 rounded-lg text-sm font-medium transition-all flex items-center gap-2 ${activeTab === 'advanced' ? 'bg-violet-500 text-white' : 'text-slate-500 hover:bg-slate-100'}`}>
@@ -396,7 +402,14 @@ function App() {
                         />
                     )}
 
-                    {activeTab === 'optimizer' && <SystemOptimizer />}
+                    {activeTab === 'optimizer' && (
+                        <ManualOptimizer
+                            processes={processes}
+                            topology={topology as any}
+                            showToast={showToast}
+                            onScan={handleScan}
+                        />
+                    )}
 
                     {activeTab === 'advanced' && <AdvancedPanel />}
                 </div>
